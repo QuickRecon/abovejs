@@ -31,6 +31,7 @@ export class ARManager {
     terrainMesh = null;
     handTracking = null;
     overlayLayers = null;
+    toolManager = null;
 
     // Callbacks
     onModeChange = null;
@@ -299,8 +300,13 @@ export class ARManager {
         }
 
         // Reset gesture state when pausing to prevent phantom inputs
-        if (shouldPause && this.handTracking) {
-            this.handTracking.onSessionPaused();
+        if (shouldPause) {
+            if (this.handTracking) {
+                this.handTracking.onSessionPaused();
+            }
+            if (this.toolManager) {
+                this.toolManager.reset();
+            }
         }
     }
 
@@ -321,6 +327,15 @@ export class ARManager {
         // Detach overlay contour groups
         if (this.overlayLayers?.contourGroup && this.overlayLayers.contourGroup.parent === container) {
             container.remove(this.overlayLayers.contourGroup);
+        }
+
+        // Detach tool groups so they survive scene disposal
+        if (this.toolManager) {
+            for (const entry of this.toolManager.tools) {
+                if (entry.tool.group.parent === container) {
+                    container.remove(entry.tool.group);
+                }
+            }
         }
     }
 
@@ -364,9 +379,21 @@ export class ARManager {
      * Render callback called each frame.
      */
     _onRender(time, frame) {
-        // Update hand tracking if in AR mode
-        if (this.currentMode === ARMode.AR && this.handTracking && frame) {
-            this.handTracking.update(frame, this.arScene.getModelContainer());
+        if (this.currentMode === ARMode.AR && frame) {
+            // Update tool manager BEFORE hand tracking so tool interactions
+            // can suppress map gestures for the current frame.
+            // Wrapped in try/catch so tool errors never block hand tracking.
+            if (this.toolManager) {
+                try {
+                    this.toolManager.update(frame);
+                } catch (e) {
+                    console.warn('ToolManager update error:', e);
+                }
+            }
+
+            if (this.handTracking) {
+                this.handTracking.update(frame, this.arScene.getModelContainer());
+            }
         }
     }
 
@@ -384,6 +411,14 @@ export class ARManager {
      */
     setHandTracking(handTracking) {
         this.handTracking = handTracking;
+    }
+
+    /**
+     * Set the tool manager component.
+     * @param {ToolManager} toolManager
+     */
+    setToolManager(toolManager) {
+        this.toolManager = toolManager;
     }
 
     /**
@@ -418,6 +453,7 @@ export class ARManager {
         this.terrainMesh = null;
         this.handTracking = null;
         this.overlayLayers = null;
+        this.toolManager = null;
         this.appState = null;
         this.appConfig = null;
     }

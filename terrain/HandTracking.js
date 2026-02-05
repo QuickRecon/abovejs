@@ -92,6 +92,9 @@ export class HandTracking {
 
         // ARScene reference for pause state
         this.arScene = null;
+
+        // Tool interaction suppression flag
+        this.toolInteractionActive = false;
     }
 
     /**
@@ -226,7 +229,17 @@ export class HandTracking {
      * Detect current gesture based on hand states.
      * @returns {string} GestureType
      */
+    /**
+     * Set whether a tool interaction is active (suppresses map gestures).
+     * @param {boolean} active
+     */
+    setToolInteractionActive(active) {
+        this.toolInteractionActive = active;
+    }
+
     _detectGesture() {
+        if (this.toolInteractionActive) return GestureType.NONE;
+
         const now = performance.now();
         const intentDelay = this.config.pinchIntentDelay;
 

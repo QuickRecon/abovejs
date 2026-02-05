@@ -9,6 +9,7 @@ import { ARManager } from './terrain/ARManager.js';
 import { TerrainMesh } from './terrain/TerrainMesh.js';
 import { OverlayLayers } from './terrain/OverlayLayers.js';
 import { HandTracking } from './terrain/HandTracking.js';
+import { ToolManager } from './terrain/ToolManager.js';
 import { LoadingProgress } from './terrain/LoadingProgress.js';
 
 // ============================================
@@ -19,6 +20,7 @@ let arManager = null;
 let terrainMesh = null;
 let overlayLayers = null;
 let handTracking = null;
+let toolManager = null;
 let loadingProgress = null;
 
 // Cached contour data for scene rebuilds
@@ -299,6 +301,10 @@ async function buildTerrain(cogData) {
     });
     arManager.setHandTracking(handTracking);
 
+    // Set up tool manager for AR
+    toolManager = new ToolManager();
+    arManager.setToolManager(toolManager);
+
     // When AR session ends (externally or via exit button), rebuild desktop 3D
     arManager.onSessionEnd = async () => {
         console.log('AR session ended — rebuilding desktop 3D scene');
@@ -412,6 +418,11 @@ function rebuildSceneContents() {
         const contourToggle = document.getElementById('contour-toggle');
         overlayLayers.setVisibility('contours', contourToggle.checked);
     }
+
+    // Re-attach tool visuals to the new container
+    if (toolManager) {
+        toolManager.reattach(modelContainer);
+    }
 }
 
 // ============================================
@@ -487,6 +498,10 @@ function showLanding() {
     if (overlayLayers) {
         overlayLayers.dispose();
         overlayLayers = null;
+    }
+    if (toolManager) {
+        toolManager.dispose();
+        toolManager = null;
     }
     handTracking = null;
     lastContourResult = null;
@@ -707,6 +722,22 @@ function initEventHandlers() {
                 arScene.getCamera(),
                 arScene
             );
+
+            // Init tool manager with scene references
+            if (toolManager) {
+                toolManager.init(
+                    arScene.getScene(),
+                    arScene.getCamera(),
+                    arManager.getModelContainer(),
+                    terrainMesh,
+                    handTracking.hand1,
+                    handTracking.hand2,
+                    handTracking.hands
+                );
+                toolManager.onInteractionStateChange = (active) => {
+                    handTracking.setToolInteractionActive(active);
+                };
+            }
         }
     });
 
