@@ -33,6 +33,11 @@ export class ARScene {
     // Session pause state (for when XR session is blurred/hidden)
     isSessionPaused = false;
 
+    // Pause drift compensation — counteracts degraded viewer pose data
+    // the Quest runtime provides during visible-blurred.
+    _prePauseViewerPos = null;
+    _pauseCompensation = null;
+
     /**
      * Initialize the Three.js scene.
      * @param {HTMLElement} containerEl - DOM element to render into
@@ -432,8 +437,13 @@ export class ARScene {
     _render(time, frame) {
         // When session is paused (Quest menu open, etc.):
         // - Skip app logic (hand tracking, controls, animations) to reduce load
-        // - BUT continue rendering to maintain WebXR pose tracking
+        // - Compensate for viewer pose drift so the model stays world-anchored
+        // - Keep submitting frames — Quest ATW is rotation-only, so skipping
+        //   frames would make the content fully head-locked
         if (!this.isSessionPaused) {
+            // Save viewer position each frame for pause drift reference
+            this._saveViewerPosition(frame);
+
             // Update orbit controls (desktop mode)
             if (this.controls?.enabled) {
                 this.controls.update();
@@ -446,10 +456,72 @@ export class ARScene {
             if (this.onRender) {
                 this.onRender(time, frame);
             }
+        } else {
+            this._compensatePauseDrift(frame);
         }
 
         // ALWAYS render the scene - required for WebXR pose tracking
         this.renderer.render(this.scene, this.camera);
+    }
+
+    /**
+     * Save the current viewer position as a reference for pause drift detection.
+     * Called every frame during normal (non-paused) operation so we always have
+     * the most recent good position when a pause begins.
+     */
+    _saveViewerPosition(frame) {
+        if (!frame || !this.renderer.xr.isPresenting) return;
+
+        const refSpace = this.renderer.xr.getReferenceSpace();
+        if (!refSpace) return;
+
+        const pose = frame.getViewerPose(refSpace);
+        if (!pose) return;
+
+        const pos = pose.transform.position;
+        if (!this._prePauseViewerPos) {
+            this._prePauseViewerPos = new THREE.Vector3();
+        }
+        this._prePauseViewerPos.set(pos.x, pos.y, pos.z);
+    }
+
+    /**
+     * During visible-blurred, the Quest runtime throttles frame callbacks and
+     * may provide degraded viewer pose data even though Horizon OS tracking is
+     * fine. Between our (throttled) submitted frames the compositor applies
+     * rotation-only ATW, which can't correct for positional drift — making the
+     * scene appear head-locked.
+     *
+     * We can't fix the between-frame ATW behaviour, but we CAN ensure each
+     * frame we DO submit has the model at the correct apparent position by
+     * shifting the model container to counter any viewer position drift from
+     * the last known-good (pre-pause) reference.
+     */
+    _compensatePauseDrift(frame) {
+        if (!frame || !this.renderer.xr.isPresenting || !this.modelContainer) return;
+        if (!this._prePauseViewerPos) return;
+
+        const refSpace = this.renderer.xr.getReferenceSpace();
+        if (!refSpace) return;
+
+        const pose = frame.getViewerPose(refSpace);
+        if (!pose) return;
+
+        const pos = pose.transform.position;
+        const drift = new THREE.Vector3(
+            pos.x - this._prePauseViewerPos.x,
+            pos.y - this._prePauseViewerPos.y,
+            pos.z - this._prePauseViewerPos.z
+        );
+
+        // Remove previous compensation before applying updated one
+        if (this._pauseCompensation) {
+            this.modelContainer.position.sub(this._pauseCompensation);
+        } else {
+            this._pauseCompensation = new THREE.Vector3();
+        }
+        this._pauseCompensation.copy(drift);
+        this.modelContainer.position.add(this._pauseCompensation);
     }
 
     /**
@@ -459,6 +531,11 @@ export class ARScene {
      * @param {boolean} paused
      */
     setSessionPaused(paused) {
+        // When unpausing, remove any drift compensation applied during pause
+        if (!paused && this._pauseCompensation && this.modelContainer) {
+            this.modelContainer.position.sub(this._pauseCompensation);
+            this._pauseCompensation.set(0, 0, 0);
+        }
         this.isSessionPaused = paused;
     }
 
@@ -475,6 +552,9 @@ export class ARScene {
      */
     resetModelTransform() {
         if (!this.modelContainer) return;
+
+        this._prePauseViewerPos = null;
+        this._pauseCompensation = null;
 
         this.modelContainer.position.set(0, 0, 0);
         this.modelContainer.rotation.set(0, 0, 0);
@@ -520,6 +600,9 @@ export class ARScene {
             }
             this.renderer = null;
         }
+
+        this._prePauseViewerPos = null;
+        this._pauseCompensation = null;
 
         this.scene = null;
         this.camera = null;
