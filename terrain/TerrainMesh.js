@@ -1256,12 +1256,53 @@ export class TerrainMesh {
             modelZ[gy] = (gy / (gh - 1)) * this.modelHeight - halfH;
         }
 
+        // Precompute per-vertex surface normals using central differences.
+        // This ensures contour points on shared edges get identical offsets
+        // regardless of which cell generates them.
+        const cellW = this.modelWidth / (gw - 1);
+        const cellH = this.modelHeight / (gh - 1);
+        const vertexNormals = new Float32Array(gw * gh * 3);
+
+        for (let gy = 0; gy < gh; gy++) {
+            for (let gx = 0; gx < gw; gx++) {
+                const idx = (gy * gw + gx) * 3;
+                const c = grid[gy * gw + gx];
+                if (c !== c) { // NaN
+                    vertexNormals[idx] = 0;
+                    vertexNormals[idx + 1] = 1;
+                    vertexNormals[idx + 2] = 0;
+                    continue;
+                }
+
+                const left  = gx > 0       ? grid[gy * gw + gx - 1] : c;
+                const right = gx < gw - 1  ? grid[gy * gw + gx + 1] : c;
+                const up    = gy > 0        ? grid[(gy - 1) * gw + gx] : c;
+                const down  = gy < gh - 1   ? grid[(gy + 1) * gw + gx] : c;
+
+                // Use center value as fallback for NaN neighbors
+                const l = left === left ? left : c;
+                const r = right === right ? right : c;
+                const u = up === up ? up : c;
+                const d = down === down ? down : c;
+
+                const dx = (gx > 0 && gx < gw - 1) ? 2 : 1;
+                const dz = (gy > 0 && gy < gh - 1) ? 2 : 1;
+
+                const gradX = (r - l) / (dx * cellW) * heightScale;
+                const gradZ = (d - u) / (dz * cellH) * heightScale;
+                const nLen = Math.sqrt(gradX * gradX + 1 + gradZ * gradZ);
+                vertexNormals[idx]     = -gradX / nLen;
+                vertexNormals[idx + 1] = 1 / nLen;
+                vertexNormals[idx + 2] = -gradZ / nLen;
+            }
+        }
+
         const segmentChunks = [];
         let totalVertices = 0;
 
         for (let ti = 0; ti < thresholds.length; ti++) {
             const threshold = thresholds[ti];
-            const contourY = (threshold - referenceElevation) * heightScale + heightOffset;
+            const contourY = (threshold - referenceElevation) * heightScale;
             const chunkData = [];
 
             for (let gy = 0; gy < gh - 1; gy++) {
@@ -1303,24 +1344,45 @@ export class TerrainMesh {
                     const z0 = modelZ[gy];
                     const z1 = modelZ[gy + 1];
 
-                    // Compute surface normal from cell gradient for offset direction
-                    const cellW = x1 - x0;
-                    const cellH = z1 - z0;
-                    const gradX = ((tr + br) - (tl + bl)) * 0.5 / cellW * heightScale;
-                    const gradZ = ((bl + br) - (tl + tr)) * 0.5 / cellH * heightScale;
-                    // Surface normal (unnormalized): (-gradX, 1, -gradZ)
-                    const nLen = Math.sqrt(gradX * gradX + 1 + gradZ * gradZ);
-                    const nx = -gradX / nLen;
-                    const ny = 1 / nLen;
-                    const nz = -gradZ / nLen;
+                    // Corner normal indices
+                    const ntl = (gy * gw + gx) * 3;
+                    const ntr = (gy * gw + gx + 1) * 3;
+                    const nbr = ((gy + 1) * gw + gx + 1) * 3;
+                    const nbl = ((gy + 1) * gw + gx) * 3;
 
                     for (const [e0, e1] of edges) {
                         const p0 = this._interpolateEdge(e0, threshold, tl, tr, br, bl, x0, x1, z0, z1);
                         const p1 = this._interpolateEdge(e1, threshold, tl, tr, br, bl, x0, x1, z0, z1);
+                        const t0 = p0[2];
+                        const t1 = p1[2];
+
+                        // Interpolate normals from precomputed per-vertex normals
+                        let n0i0, n0i1, n1i0, n1i1;
+                        // Edge 0: tl→tr, Edge 1: tr→br, Edge 2: bl→br, Edge 3: tl→bl
+                        switch (e0) {
+                            case 0: n0i0 = ntl; n0i1 = ntr; break;
+                            case 1: n0i0 = ntr; n0i1 = nbr; break;
+                            case 2: n0i0 = nbl; n0i1 = nbr; break;
+                            case 3: n0i0 = ntl; n0i1 = nbl; break;
+                        }
+                        switch (e1) {
+                            case 0: n1i0 = ntl; n1i1 = ntr; break;
+                            case 1: n1i0 = ntr; n1i1 = nbr; break;
+                            case 2: n1i0 = nbl; n1i1 = nbr; break;
+                            case 3: n1i0 = ntl; n1i1 = nbl; break;
+                        }
+
+                        const nx0 = vertexNormals[n0i0]     + t0 * (vertexNormals[n0i1]     - vertexNormals[n0i0]);
+                        const ny0 = vertexNormals[n0i0 + 1] + t0 * (vertexNormals[n0i1 + 1] - vertexNormals[n0i0 + 1]);
+                        const nz0 = vertexNormals[n0i0 + 2] + t0 * (vertexNormals[n0i1 + 2] - vertexNormals[n0i0 + 2]);
+
+                        const nx1 = vertexNormals[n1i0]     + t1 * (vertexNormals[n1i1]     - vertexNormals[n1i0]);
+                        const ny1 = vertexNormals[n1i0 + 1] + t1 * (vertexNormals[n1i1 + 1] - vertexNormals[n1i0 + 1]);
+                        const nz1 = vertexNormals[n1i0 + 2] + t1 * (vertexNormals[n1i1 + 2] - vertexNormals[n1i0 + 2]);
 
                         chunkData.push(
-                            p0[0] + nx * heightOffset, contourY + ny * heightOffset, p0[1] + nz * heightOffset,
-                            p1[0] + nx * heightOffset, contourY + ny * heightOffset, p1[1] + nz * heightOffset
+                            p0[0] + nx0 * heightOffset, contourY + ny0 * heightOffset, p0[1] + nz0 * heightOffset,
+                            p1[0] + nx1 * heightOffset, contourY + ny1 * heightOffset, p1[1] + nz1 * heightOffset
                         );
                     }
                 }
@@ -1510,16 +1572,16 @@ export class TerrainMesh {
         switch (edge) {
             case 0:
                 t = (threshold - tl) / (tr - tl);
-                return [x0 + t * (x1 - x0), z0];
+                return [x0 + t * (x1 - x0), z0, t];
             case 1:
                 t = (threshold - tr) / (br - tr);
-                return [x1, z0 + t * (z1 - z0)];
+                return [x1, z0 + t * (z1 - z0), t];
             case 2:
                 t = (threshold - bl) / (br - bl);
-                return [x0 + t * (x1 - x0), z1];
+                return [x0 + t * (x1 - x0), z1, t];
             case 3:
                 t = (threshold - tl) / (bl - tl);
-                return [x0, z0 + t * (z1 - z0)];
+                return [x0, z0 + t * (z1 - z0), t];
         }
     }
 
