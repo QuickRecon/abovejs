@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import { HandMenu, ToolType, MenuState } from './HandMenu.js';
+import { HandMenu, ToolType } from './HandMenu.js';
 import { DepthProbeTool } from './DepthProbeTool.js';
 import { MeasureTool } from './MeasureTool.js';
 import { worldToLocal, localToWorld } from './ToolUtils.js';
@@ -14,39 +14,37 @@ import { worldToLocal, localToWorld } from './ToolUtils.js';
 const PROXIMITY_THRESHOLD = 0.05; // 8cm in world space
 
 export class ToolManager {
-    constructor() {
-        this.scene = null;
-        this.camera = null;
-        this.modelContainer = null;
-        this.terrainMesh = null;
-        this.hand0 = null;
-        this.hand1 = null;
-        this.handStates = null;
+    scene = null;
+    camera = null;
+    modelContainer = null;
+    terrainMesh = null;
+    hand0 = null;
+    hand1 = null;
+    handStates = null;
 
-        // Hand menu
-        this.handMenu = null;
+    // Hand menu
+    handMenu = null;
 
-        // Placed tools
-        this.tools = []; // [{tool, type}]
+    // Placed tools
+    tools = []; // [{tool, type}]
 
-        // Grab state
-        this.grabbedTool = null;
-        this.grabbedPointIndex = -1;
-        this.grabHandIndex = -1;
+    // Grab state
+    grabbedTool = null;
+    grabbedPointIndex = -1;
+    grabHandIndex = -1;
 
-        // Tool freshly selected from menu (being dragged to placement)
-        this.menuGrabTool = null;
-        this.menuGrabType = null;
+    // Tool freshly selected from menu (being dragged to placement)
+    menuGrabTool = null;
+    menuGrabType = null;
 
-        // Interaction state callback
-        this.onInteractionStateChange = null;
+    // Interaction state callback
+    onInteractionStateChange = null;
 
-        // Track previous interaction active state
-        this._wasInteractionActive = false;
+    // Track previous interaction active state
+    _wasInteractionActive = false;
 
-        // Pinch tracking for edge detection
-        this._prevPinch = [false, false];
-    }
+    // Pinch tracking for edge detection
+    _prevPinch = [false, false];
 
     /**
      * Initialize the tool manager.
@@ -266,16 +264,49 @@ export class ToolManager {
     }
 
     /**
-     * Check proximity of hands to placed tools and start grabs.
+     * Clear highlight state on every interaction point of every placed tool.
      */
-    _checkProximityAndGrab(hands, pinchStart) {
-        // Clear all highlights first
+    _clearAllHighlights() {
         for (const entry of this.tools) {
             const points = entry.tool.getInteractionPoints();
             for (let pi = 0; pi < points.length; pi++) {
                 entry.tool.setHighlight(pi, false);
             }
         }
+    }
+
+    /**
+     * Find the nearest interaction point (across all placed tools) to a world-
+     * space position.
+     * @param {THREE.Vector3} fingerWorld
+     * @returns {{ tool: object, pointIndex: number } | null}
+     */
+    _findNearestInteractionPoint(fingerWorld) {
+        let nearestTool = null;
+        let nearestPointIdx = -1;
+        let nearestDist = PROXIMITY_THRESHOLD;
+
+        for (const entry of this.tools) {
+            const points = entry.tool.getInteractionPoints();
+            for (let pi = 0; pi < points.length; pi++) {
+                const pointWorld = localToWorld(points[pi], this.modelContainer);
+                const dist = fingerWorld.distanceTo(pointWorld);
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestTool = entry.tool;
+                    nearestPointIdx = pi;
+                }
+            }
+        }
+
+        return nearestTool ? { tool: nearestTool, pointIndex: nearestPointIdx } : null;
+    }
+
+    /**
+     * Check proximity of hands to placed tools and start grabs.
+     */
+    _checkProximityAndGrab(hands, pinchStart) {
+        this._clearAllHighlights();
 
         // For each hand, find nearest interaction point
         for (let hi = 0; hi < 2; hi++) {
@@ -288,34 +319,18 @@ export class ToolManager {
             const fingerWorld = new THREE.Vector3();
             indexTip.getWorldPosition(fingerWorld);
 
-            let nearestTool = null;
-            let nearestPointIdx = -1;
-            let nearestDist = PROXIMITY_THRESHOLD;
+            const nearest = this._findNearestInteractionPoint(fingerWorld);
+            if (!nearest) continue;
 
-            for (const entry of this.tools) {
-                const points = entry.tool.getInteractionPoints();
-                for (let pi = 0; pi < points.length; pi++) {
-                    const pointWorld = localToWorld(points[pi], this.modelContainer);
-                    const dist = fingerWorld.distanceTo(pointWorld);
-                    if (dist < nearestDist) {
-                        nearestDist = dist;
-                        nearestTool = entry.tool;
-                        nearestPointIdx = pi;
-                    }
-                }
-            }
+            nearest.tool.setHighlight(nearest.pointIndex, true);
 
-            if (nearestTool) {
-                nearestTool.setHighlight(nearestPointIdx, true);
-
-                // Start grab on pinch
-                if (pinchStart[hi]) {
-                    nearestTool.startGrab(nearestPointIdx);
-                    this.grabbedTool = nearestTool;
-                    this.grabbedPointIndex = nearestPointIdx;
-                    this.grabHandIndex = hi;
-                    break; // only one grab at a time
-                }
+            // Start grab on pinch
+            if (pinchStart[hi]) {
+                nearest.tool.startGrab(nearest.pointIndex);
+                this.grabbedTool = nearest.tool;
+                this.grabbedPointIndex = nearest.pointIndex;
+                this.grabHandIndex = hi;
+                break; // only one grab at a time
             }
         }
     }

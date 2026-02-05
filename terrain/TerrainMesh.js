@@ -208,8 +208,8 @@ const DEFAULT_CONFIG = {
 
     // Lighting defaults
     ambientColor: new THREE.Color(0.3, 0.3, 0.3),
-    lightColor: new THREE.Color(1.0, 1.0, 1.0),
-    lightDirection: new THREE.Vector3(0.5, 1.0, 0.5).normalize()
+    lightColor: new THREE.Color(1, 1, 1),
+    lightDirection: new THREE.Vector3(0.5, 1, 0.5).normalize()
 };
 
 /**
@@ -341,18 +341,12 @@ export class TerrainMesh {
     }
 
     /**
-     * Downsample elevation data if it exceeds GPU texture size limits.
+     * Calculate constrained dimensions that fit within GPU texture size limits.
+     * @param {number} srcWidth - Original width
+     * @param {number} srcHeight - Original height
+     * @returns {{newWidth: number, newHeight: number}}
      */
-    _constrainElevationToGPULimits() {
-        if (!this.elevationData) return;
-
-        const srcWidth = this.elevationWidth;
-        const srcHeight = this.elevationHeight;
-
-        if (srcWidth <= this.maxTextureSize && srcHeight <= this.maxTextureSize) {
-            return;
-        }
-
+    _calculateConstrainedDimensions(srcWidth, srcHeight) {
         const aspect = srcWidth / srcHeight;
         let newWidth, newHeight;
 
@@ -371,6 +365,24 @@ export class TerrainMesh {
                 newHeight = Math.round(newWidth / aspect);
             }
         }
+
+        return { newWidth, newHeight };
+    }
+
+    /**
+     * Downsample elevation data if it exceeds GPU texture size limits.
+     */
+    _constrainElevationToGPULimits() {
+        if (!this.elevationData) return;
+
+        const srcWidth = this.elevationWidth;
+        const srcHeight = this.elevationHeight;
+
+        if (srcWidth <= this.maxTextureSize && srcHeight <= this.maxTextureSize) {
+            return;
+        }
+
+        const { newWidth, newHeight } = this._calculateConstrainedDimensions(srcWidth, srcHeight);
 
         console.log(`Downsampling elevation data from ${srcWidth}x${srcHeight} to ${newWidth}x${newHeight} (GPU max: ${this.maxTextureSize})`);
 
@@ -455,7 +467,46 @@ export class TerrainMesh {
         this.elevationHeight = height;
         this.geoBounds = geoBounds;
 
-        // Calculate model dimensions preserving aspect ratio
+        this._calculateModelDimensions(geoBounds);
+
+        const progress = onProgress ?? (() => {});
+        progress('CREATE_TERRAIN', null);
+
+        this._constrainElevationToGPULimits();
+        this._createElevationTexture();
+        this._createGeometry();
+
+        progress('COMPUTE_COLORS', null);
+        await Promise.all([
+            this._computeVertexColorsAsync((p) => progress('COMPUTE_COLORS', p)),
+            this._filterAboveWaterTrianglesAsync((p) => progress('FILTER_GEOMETRY', p))
+        ]);
+
+        progress('GENERATE_NORMALS', null);
+        await this._generateNormalMapFromData(
+            fullResElevationPromise,
+            (p) => progress('GENERATE_NORMALS', p)
+        );
+
+        this._createMaterial();
+
+        this.mesh = new THREE.Mesh(this.geometry, this.material);
+        this.mesh.name = 'terrainMesh';
+        this.mesh.frustumCulled = false;
+        this.mesh.position.set(0, 0, 0);
+
+        if (parentGroup) {
+            parentGroup.add(this.mesh);
+        }
+
+        return this.mesh;
+    }
+
+    /**
+     * Calculate model dimensions from geographic bounds, preserving aspect ratio.
+     * @param {number[]} geoBounds - [minX, minY, maxX, maxY]
+     */
+    _calculateModelDimensions(geoBounds) {
         const [minX, minY, maxX, maxY] = geoBounds;
         const geoWidth = maxX - minX;
         const geoHeight = maxY - minY;
@@ -476,56 +527,38 @@ export class TerrainMesh {
         console.log(`Real-world size: ${this.realWorldWidth.toFixed(0)}m x ${this.realWorldHeight.toFixed(0)}m`);
         console.log(`Model size: ${this.modelWidth.toFixed(3)}m x ${this.modelHeight.toFixed(3)}m`);
         console.log(`Scale for 1:1: ${this.realWorldScale.toFixed(1)}x`);
+    }
 
-        if (onProgress) onProgress('CREATE_TERRAIN', null);
-
-        this._constrainElevationToGPULimits();
-        this._createElevationTexture();
-        this._createGeometry();
-
-        if (onProgress) onProgress('COMPUTE_COLORS', null);
-        await Promise.all([
-            this._computeVertexColorsAsync(onProgress ? (p) => onProgress('COMPUTE_COLORS', p) : null),
-            this._filterAboveWaterTrianglesAsync(onProgress ? (p) => onProgress('FILTER_GEOMETRY', p) : null)
-        ]);
-
-        if (onProgress) onProgress('GENERATE_NORMALS', null);
-        if (fullResElevationPromise) {
-            try {
-                const fullRes = await fullResElevationPromise;
-                console.log(`Using full-res elevation for normal map: ${fullRes.width}x${fullRes.height}`);
-                const savedData = this.elevationData;
-                const savedWidth = this.elevationWidth;
-                const savedHeight = this.elevationHeight;
-                this.elevationData = fullRes.elevation;
-                this.elevationWidth = fullRes.width;
-                this.elevationHeight = fullRes.height;
-
-                await this._generateNormalMapCPUAsync(onProgress ? (p) => onProgress('GENERATE_NORMALS', p) : null);
-
-                this.elevationData = savedData;
-                this.elevationWidth = savedWidth;
-                this.elevationHeight = savedHeight;
-            } catch (e) {
-                console.warn('Full-res elevation failed, using low-res for normal map:', e);
-                await this._generateNormalMapCPUAsync(onProgress ? (p) => onProgress('GENERATE_NORMALS', p) : null);
-            }
-        } else {
-            await this._generateNormalMapCPUAsync(onProgress ? (p) => onProgress('GENERATE_NORMALS', p) : null);
+    /**
+     * Generate normal map, optionally using full-resolution elevation data.
+     * @param {Promise|undefined} fullResElevationPromise - Promise for full-res data
+     * @param {Function|null} onProgress - Progress callback
+     */
+    async _generateNormalMapFromData(fullResElevationPromise, onProgress) {
+        if (fullResElevationPromise === undefined) {
+            await this._generateNormalMapCPUAsync(onProgress);
+            return;
         }
 
-        this._createMaterial();
+        try {
+            const fullRes = await fullResElevationPromise;
+            console.log(`Using full-res elevation for normal map: ${fullRes.width}x${fullRes.height}`);
+            const savedData = this.elevationData;
+            const savedWidth = this.elevationWidth;
+            const savedHeight = this.elevationHeight;
+            this.elevationData = fullRes.elevation;
+            this.elevationWidth = fullRes.width;
+            this.elevationHeight = fullRes.height;
 
-        this.mesh = new THREE.Mesh(this.geometry, this.material);
-        this.mesh.name = 'terrainMesh';
-        this.mesh.frustumCulled = false;
-        this.mesh.position.set(0, 0, 0);
+            await this._generateNormalMapCPUAsync(onProgress);
 
-        if (parentGroup) {
-            parentGroup.add(this.mesh);
+            this.elevationData = savedData;
+            this.elevationWidth = savedWidth;
+            this.elevationHeight = savedHeight;
+        } catch (e) {
+            console.warn('Full-res elevation failed, using low-res for normal map:', e);
+            await this._generateNormalMapCPUAsync(onProgress);
         }
-
-        return this.mesh;
     }
 
     /**
@@ -685,7 +718,7 @@ export class TerrainMesh {
                     heightScale: { value: this.zExaggeration / this.realWorldScale },
                     elevationSize: { value: new THREE.Vector2(this.elevationWidth, this.elevationHeight) },
                     normalMap: { value: this.normalMap },
-                    normalScale: { value: 2.0 },
+                    normalScale: { value: 2 },
                     ambientColor: { value: this.config.ambientColor },
                     lightColor: { value: this.config.lightColor },
                     lightDirection: { value: this.config.lightDirection },
@@ -699,7 +732,7 @@ export class TerrainMesh {
             this.material = new THREE.ShaderMaterial({
                 uniforms: {
                     normalMap: { value: this.normalMap },
-                    normalScale: { value: 2.0 },
+                    normalScale: { value: 2 },
                     ambientColor: { value: this.config.ambientColor },
                     lightColor: { value: this.config.lightColor },
                     lightDirection: { value: this.config.lightDirection },
@@ -757,7 +790,7 @@ export class TerrainMesh {
         for (let i = 0; i < vertexCount; i++) {
             const u = uvs.getX(i);
             const v = uvs.getY(i);
-            const elevation = this._sampleElevation(u, 1.0 - v);
+            const elevation = this._sampleElevation(u, 1 - v);
             const idx = i * 3;
 
             if (!Number.isFinite(elevation)) {
@@ -807,7 +840,7 @@ export class TerrainMesh {
         await processInChunks(vertexCount, chunkSize, (i) => {
             const u = uvs.getX(i);
             const v = uvs.getY(i);
-            const elevation = this._sampleElevation(u, 1.0 - v);
+            const elevation = this._sampleElevation(u, 1 - v);
             const idx = i * 3;
 
             if (!Number.isFinite(elevation)) {
@@ -865,7 +898,7 @@ export class TerrainMesh {
         const isNoData = new Uint8Array(vertexCount);
         for (let i = 0; i < vertexCount; i++) {
             const u = uvs.getX(i);
-            const v = 1.0 - uvs.getY(i);
+            const v = 1 - uvs.getY(i);
 
             if (this._hasNearbyNoData(u, v)) {
                 isNoData[i] = 1;
@@ -1222,181 +1255,27 @@ export class TerrainMesh {
         const gh = this.gridHeight;
         const heightScale = this.getHeightScale();
 
-        const maxContourDepth = Math.round(referenceElevation - minElevation);
-        const thresholds = [];
-        for (let depth = interval; depth <= maxContourDepth; depth += interval) {
-            const ahdLevel = referenceElevation - depth;
-            if (ahdLevel >= minElevation) {
-                thresholds.push(ahdLevel);
-            }
-        }
-
+        const thresholds = this._buildContourThresholds(referenceElevation, minElevation, interval);
         if (thresholds.length === 0) {
             console.warn('No contour thresholds generated');
             return { segments: new Float32Array(0), vertexCount: 0 };
         }
 
-        const grid = new Float32Array(gw * gh);
-        for (let gy = 0; gy < gh; gy++) {
-            const v = gy / (gh - 1);
-            for (let gx = 0; gx < gw; gx++) {
-                const u = gx / (gw - 1);
-                grid[gy * gw + gx] = this._sampleElevation(u, v);
-            }
-        }
-
-        const halfW = this.modelWidth / 2;
-        const halfH = this.modelHeight / 2;
-        const modelX = new Float32Array(gw);
-        const modelZ = new Float32Array(gh);
-        for (let gx = 0; gx < gw; gx++) {
-            modelX[gx] = (gx / (gw - 1)) * this.modelWidth - halfW;
-        }
-        for (let gy = 0; gy < gh; gy++) {
-            modelZ[gy] = (gy / (gh - 1)) * this.modelHeight - halfH;
-        }
-
-        // Precompute per-vertex surface normals using central differences.
-        // This ensures contour points on shared edges get identical offsets
-        // regardless of which cell generates them.
-        const cellW = this.modelWidth / (gw - 1);
-        const cellH = this.modelHeight / (gh - 1);
-        const vertexNormals = new Float32Array(gw * gh * 3);
-
-        for (let gy = 0; gy < gh; gy++) {
-            for (let gx = 0; gx < gw; gx++) {
-                const idx = (gy * gw + gx) * 3;
-                const c = grid[gy * gw + gx];
-                if (c !== c) { // NaN
-                    vertexNormals[idx] = 0;
-                    vertexNormals[idx + 1] = 1;
-                    vertexNormals[idx + 2] = 0;
-                    continue;
-                }
-
-                const left  = gx > 0       ? grid[gy * gw + gx - 1] : c;
-                const right = gx < gw - 1  ? grid[gy * gw + gx + 1] : c;
-                const up    = gy > 0        ? grid[(gy - 1) * gw + gx] : c;
-                const down  = gy < gh - 1   ? grid[(gy + 1) * gw + gx] : c;
-
-                // Use center value as fallback for NaN neighbors
-                const l = left === left ? left : c;
-                const r = right === right ? right : c;
-                const u = up === up ? up : c;
-                const d = down === down ? down : c;
-
-                const dx = (gx > 0 && gx < gw - 1) ? 2 : 1;
-                const dz = (gy > 0 && gy < gh - 1) ? 2 : 1;
-
-                const gradX = (r - l) / (dx * cellW) * heightScale;
-                const gradZ = (d - u) / (dz * cellH) * heightScale;
-                const nLen = Math.sqrt(gradX * gradX + 1 + gradZ * gradZ);
-                vertexNormals[idx]     = -gradX / nLen;
-                vertexNormals[idx + 1] = 1 / nLen;
-                vertexNormals[idx + 2] = -gradZ / nLen;
-            }
-        }
+        const { grid, modelX, modelZ } = this._buildContourGrid(gw, gh);
+        const vertexNormals = this._precomputeVertexNormals(grid, gw, gh, heightScale);
+        const ctx = { grid, gw, gh, heightScale, heightOffset, modelX, modelZ, vertexNormals, referenceElevation };
 
         const segmentChunks = [];
         let totalVertices = 0;
 
         for (let ti = 0; ti < thresholds.length; ti++) {
             const threshold = thresholds[ti];
-            const contourY = (threshold - referenceElevation) * heightScale;
-            const chunkData = [];
-
-            for (let gy = 0; gy < gh - 1; gy++) {
-                const rowOffset = gy * gw;
-                const nextRowOffset = (gy + 1) * gw;
-
-                for (let gx = 0; gx < gw - 1; gx++) {
-                    const tl = grid[rowOffset + gx];
-                    const tr = grid[rowOffset + gx + 1];
-                    const br = grid[nextRowOffset + gx + 1];
-                    const bl = grid[nextRowOffset + gx];
-
-                    if (tl !== tl || tr !== tr || br !== br || bl !== bl) continue;
-
-                    const caseBits = (tl >= threshold ? 8 : 0)
-                                   | (tr >= threshold ? 4 : 0)
-                                   | (br >= threshold ? 2 : 0)
-                                   | (bl >= threshold ? 1 : 0);
-
-                    if (caseBits === 0 || caseBits === 15) continue;
-
-                    let edges;
-                    if (caseBits === 5) {
-                        const center = (tl + tr + br + bl) * 0.25;
-                        edges = center >= threshold
-                            ? [[3, 0], [2, 1]]
-                            : [[0, 1], [3, 2]];
-                    } else if (caseBits === 10) {
-                        const center = (tl + tr + br + bl) * 0.25;
-                        edges = center >= threshold
-                            ? [[0, 1], [3, 2]]
-                            : [[3, 0], [2, 1]];
-                    } else {
-                        edges = MS_EDGE_TABLE[caseBits];
-                    }
-
-                    const x0 = modelX[gx];
-                    const x1 = modelX[gx + 1];
-                    const z0 = modelZ[gy];
-                    const z1 = modelZ[gy + 1];
-
-                    // Corner normal indices
-                    const ntl = (gy * gw + gx) * 3;
-                    const ntr = (gy * gw + gx + 1) * 3;
-                    const nbr = ((gy + 1) * gw + gx + 1) * 3;
-                    const nbl = ((gy + 1) * gw + gx) * 3;
-
-                    for (const [e0, e1] of edges) {
-                        const p0 = this._interpolateEdge(e0, threshold, tl, tr, br, bl, x0, x1, z0, z1);
-                        const p1 = this._interpolateEdge(e1, threshold, tl, tr, br, bl, x0, x1, z0, z1);
-                        const t0 = p0[2];
-                        const t1 = p1[2];
-
-                        // Interpolate normals from precomputed per-vertex normals
-                        let n0i0, n0i1, n1i0, n1i1;
-                        // Edge 0: tl→tr, Edge 1: tr→br, Edge 2: bl→br, Edge 3: tl→bl
-                        switch (e0) {
-                            case 0: n0i0 = ntl; n0i1 = ntr; break;
-                            case 1: n0i0 = ntr; n0i1 = nbr; break;
-                            case 2: n0i0 = nbl; n0i1 = nbr; break;
-                            case 3: n0i0 = ntl; n0i1 = nbl; break;
-                        }
-                        switch (e1) {
-                            case 0: n1i0 = ntl; n1i1 = ntr; break;
-                            case 1: n1i0 = ntr; n1i1 = nbr; break;
-                            case 2: n1i0 = nbl; n1i1 = nbr; break;
-                            case 3: n1i0 = ntl; n1i1 = nbl; break;
-                        }
-
-                        const nx0 = vertexNormals[n0i0]     + t0 * (vertexNormals[n0i1]     - vertexNormals[n0i0]);
-                        const ny0 = vertexNormals[n0i0 + 1] + t0 * (vertexNormals[n0i1 + 1] - vertexNormals[n0i0 + 1]);
-                        const nz0 = vertexNormals[n0i0 + 2] + t0 * (vertexNormals[n0i1 + 2] - vertexNormals[n0i0 + 2]);
-
-                        const nx1 = vertexNormals[n1i0]     + t1 * (vertexNormals[n1i1]     - vertexNormals[n1i0]);
-                        const ny1 = vertexNormals[n1i0 + 1] + t1 * (vertexNormals[n1i1 + 1] - vertexNormals[n1i0 + 1]);
-                        const nz1 = vertexNormals[n1i0 + 2] + t1 * (vertexNormals[n1i1 + 2] - vertexNormals[n1i0 + 2]);
-
-                        chunkData.push(
-                            p0[0] + nx0 * heightOffset, contourY + ny0 * heightOffset, p0[1] + nz0 * heightOffset,
-                            p1[0] + nx1 * heightOffset, contourY + ny1 * heightOffset, p1[1] + nz1 * heightOffset
-                        );
-                    }
-                }
-            }
+            const chunkData = this._processThreshold(threshold, ctx);
 
             if (chunkData.length > 0) {
-                if (simplifyTolerance > 0) {
-                    const simplified = this._chainAndSimplifySegments(chunkData, contourY, simplifyTolerance);
-                    segmentChunks.push(simplified);
-                    totalVertices += simplified.length / 3;
-                } else {
-                    segmentChunks.push(chunkData);
-                    totalVertices += chunkData.length / 3;
-                }
+                const result = this._simplifyChunkIfNeeded(chunkData, threshold, referenceElevation, heightScale, simplifyTolerance);
+                segmentChunks.push(result);
+                totalVertices += result.length / 3;
             }
 
             if (onProgress) onProgress((ti + 1) / thresholds.length);
@@ -1421,12 +1300,246 @@ export class TerrainMesh {
     }
 
     /**
-     * Chain raw marching-squares segments into polylines, simplify, then emit.
+     * Build the list of contour elevation thresholds.
+     * @param {number} referenceElevation
+     * @param {number} minElevation
+     * @param {number} interval
+     * @returns {number[]}
      */
-    _chainAndSimplifySegments(data, contourY, tolerance) {
-        const segCount = data.length / 6;
-        if (segCount === 0) return data;
+    _buildContourThresholds(referenceElevation, minElevation, interval) {
+        const maxContourDepth = Math.round(referenceElevation - minElevation);
+        const thresholds = [];
+        for (let depth = interval; depth <= maxContourDepth; depth += interval) {
+            const ahdLevel = referenceElevation - depth;
+            if (ahdLevel >= minElevation) {
+                thresholds.push(ahdLevel);
+            }
+        }
+        return thresholds;
+    }
 
+    /**
+     * Optionally simplify a chunk of contour segment data.
+     * @param {number[]} chunkData - Raw segment data
+     * @param {number} threshold - Elevation threshold
+     * @param {number} referenceElevation
+     * @param {number} heightScale
+     * @param {number} simplifyTolerance
+     * @returns {number[]|Float32Array}
+     */
+    _simplifyChunkIfNeeded(chunkData, threshold, referenceElevation, heightScale, simplifyTolerance) {
+        if (simplifyTolerance > 0) {
+            const contourY = (threshold - referenceElevation) * heightScale;
+            return this._chainAndSimplifySegments(chunkData, contourY, simplifyTolerance);
+        }
+        return chunkData;
+    }
+
+    /**
+     * Build the elevation sampling grid and model coordinate arrays for contouring.
+     * @param {number} gw - Grid width
+     * @param {number} gh - Grid height
+     * @returns {{ grid: Float32Array, modelX: Float32Array, modelZ: Float32Array }}
+     */
+    _buildContourGrid(gw, gh) {
+        const grid = new Float32Array(gw * gh);
+        for (let gy = 0; gy < gh; gy++) {
+            const v = gy / (gh - 1);
+            for (let gx = 0; gx < gw; gx++) {
+                const u = gx / (gw - 1);
+                grid[gy * gw + gx] = this._sampleElevation(u, v);
+            }
+        }
+
+        const halfW = this.modelWidth / 2;
+        const halfH = this.modelHeight / 2;
+        const modelX = new Float32Array(gw);
+        const modelZ = new Float32Array(gh);
+        for (let gx = 0; gx < gw; gx++) {
+            modelX[gx] = (gx / (gw - 1)) * this.modelWidth - halfW;
+        }
+        for (let gy = 0; gy < gh; gy++) {
+            modelZ[gy] = (gy / (gh - 1)) * this.modelHeight - halfH;
+        }
+
+        return { grid, modelX, modelZ };
+    }
+
+    /**
+     * Precompute per-vertex surface normals using central differences.
+     * Ensures contour points on shared edges get identical offsets
+     * regardless of which cell generates them.
+     * @param {Float32Array} grid - Elevation grid
+     * @param {number} gw - Grid width
+     * @param {number} gh - Grid height
+     * @param {number} heightScale - Height scaling factor
+     * @returns {Float32Array} Vertex normals array (gw * gh * 3)
+     */
+    _precomputeVertexNormals(grid, gw, gh, heightScale) {
+        const cellW = this.modelWidth / (gw - 1);
+        const cellH = this.modelHeight / (gh - 1);
+        const vertexNormals = new Float32Array(gw * gh * 3);
+
+        for (let gy = 0; gy < gh; gy++) {
+            for (let gx = 0; gx < gw; gx++) {
+                const idx = (gy * gw + gx) * 3;
+                this._computeVertexNormal(grid, gw, gh, gx, gy, cellW, cellH, heightScale, vertexNormals, idx);
+            }
+        }
+
+        return vertexNormals;
+    }
+
+    /**
+     * Compute normal for a single grid vertex using central differences.
+     */
+    _computeVertexNormal(grid, gw, gh, gx, gy, cellW, cellH, heightScale, out, idx) {
+        const c = grid[gy * gw + gx];
+        if (Number.isNaN(c)) {
+            out[idx] = 0;
+            out[idx + 1] = 1;
+            out[idx + 2] = 0;
+            return;
+        }
+
+        const left  = gx > 0      ? grid[gy * gw + gx - 1] : c;
+        const right = gx < gw - 1 ? grid[gy * gw + gx + 1] : c;
+        const up    = gy > 0      ? grid[(gy - 1) * gw + gx] : c;
+        const down  = gy < gh - 1 ? grid[(gy + 1) * gw + gx] : c;
+
+        const l = Number.isNaN(left) ? c : left;
+        const r = Number.isNaN(right) ? c : right;
+        const u = Number.isNaN(up) ? c : up;
+        const d = Number.isNaN(down) ? c : down;
+
+        const dx = (gx > 0 && gx < gw - 1) ? 2 : 1;
+        const dz = (gy > 0 && gy < gh - 1) ? 2 : 1;
+
+        const gradX = (r - l) / (dx * cellW) * heightScale;
+        const gradZ = (d - u) / (dz * cellH) * heightScale;
+        const nLen = Math.sqrt(gradX * gradX + 1 + gradZ * gradZ);
+        out[idx]     = -gradX / nLen;
+        out[idx + 1] = 1 / nLen;
+        out[idx + 2] = -gradZ / nLen;
+    }
+
+    /**
+     * Process a single contour cell using marching squares.
+     * @param {number} gx - Grid X index
+     * @param {number} gy - Grid Y index
+     * @param {number} threshold - Contour threshold
+     * @param {number} contourY - Y position for contour
+     * @param {Object} ctx - Contour context { grid, gw, heightOffset, modelX, modelZ, vertexNormals }
+     * @param {number[]} chunkData - Output array to push segment data into
+     */
+    _processContourCell(gx, gy, threshold, contourY, ctx, chunkData) {
+        const { grid, gw, heightOffset, modelX, modelZ, vertexNormals } = ctx;
+        const rowOffset = gy * gw;
+        const nextRowOffset = (gy + 1) * gw;
+
+        const tl = grid[rowOffset + gx];
+        const tr = grid[rowOffset + gx + 1];
+        const br = grid[nextRowOffset + gx + 1];
+        const bl = grid[nextRowOffset + gx];
+
+        if (Number.isNaN(tl) || Number.isNaN(tr) || Number.isNaN(br) || Number.isNaN(bl)) return;
+
+        const caseBits = (tl >= threshold ? 8 : 0)
+                       | (tr >= threshold ? 4 : 0)
+                       | (br >= threshold ? 2 : 0)
+                       | (bl >= threshold ? 1 : 0);
+
+        if (caseBits === 0 || caseBits === 15) return;
+
+        const edges = this._resolveEdges(caseBits, tl, tr, br, bl, threshold);
+
+        const corners = { tl, tr, br, bl };
+        const bounds = { x0: modelX[gx], x1: modelX[gx + 1], z0: modelZ[gy], z1: modelZ[gy + 1] };
+
+        const ntl = (gy * gw + gx) * 3;
+        const ntr = (gy * gw + gx + 1) * 3;
+        const nbr = ((gy + 1) * gw + gx + 1) * 3;
+        const nbl = ((gy + 1) * gw + gx) * 3;
+        const normalIndices = [ntl, ntr, nbr, nbl];
+
+        for (const [e0, e1] of edges) {
+            this._emitContourSegment(e0, e1, threshold, corners, bounds, normalIndices, contourY, heightOffset, vertexNormals, chunkData);
+        }
+    }
+
+    /**
+     * Resolve marching squares edges for a case, including saddle resolution.
+     */
+    _resolveEdges(caseBits, tl, tr, br, bl, threshold) {
+        if (caseBits === 5) {
+            const center = (tl + tr + br + bl) * 0.25;
+            return center >= threshold ? [[3, 0], [2, 1]] : [[0, 1], [3, 2]];
+        }
+        if (caseBits === 10) {
+            const center = (tl + tr + br + bl) * 0.25;
+            return center >= threshold ? [[0, 1], [3, 2]] : [[3, 0], [2, 1]];
+        }
+        return MS_EDGE_TABLE[caseBits];
+    }
+
+    /**
+     * Emit a single contour line segment with normal-offset positions.
+     */
+    _emitContourSegment(e0, e1, threshold, corners, bounds, normalIndices, contourY, heightOffset, vertexNormals, chunkData) {
+        const p0 = this._interpolateEdge(e0, threshold, corners, bounds);
+        const p1 = this._interpolateEdge(e1, threshold, corners, bounds);
+
+        // Edge-to-normal-index mapping: 0=tl->tr, 1=tr->br, 2=bl->br, 3=tl->bl
+        const edgeNormalMap = [[0, 1], [1, 2], [3, 2], [0, 3]];
+        const [ni0a, ni0b] = edgeNormalMap[e0];
+        const [ni1a, ni1b] = edgeNormalMap[e1];
+
+        const n0 = this._interpolateNormal(vertexNormals, normalIndices[ni0a], normalIndices[ni0b], p0[2]);
+        const n1 = this._interpolateNormal(vertexNormals, normalIndices[ni1a], normalIndices[ni1b], p1[2]);
+
+        chunkData.push(
+            p0[0] + n0[0] * heightOffset, contourY + n0[1] * heightOffset, p0[1] + n0[2] * heightOffset,
+            p1[0] + n1[0] * heightOffset, contourY + n1[1] * heightOffset, p1[1] + n1[2] * heightOffset
+        );
+    }
+
+    /**
+     * Interpolate a normal between two vertex normals.
+     */
+    _interpolateNormal(vertexNormals, i0, i1, t) {
+        return [
+            vertexNormals[i0]     + t * (vertexNormals[i1]     - vertexNormals[i0]),
+            vertexNormals[i0 + 1] + t * (vertexNormals[i1 + 1] - vertexNormals[i0 + 1]),
+            vertexNormals[i0 + 2] + t * (vertexNormals[i1 + 2] - vertexNormals[i0 + 2])
+        ];
+    }
+
+    /**
+     * Process all cells for a single contour threshold.
+     * @param {number} threshold - Contour threshold elevation
+     * @param {Object} ctx - Contour context { grid, gw, gh, heightScale, heightOffset, modelX, modelZ, vertexNormals, referenceElevation }
+     * @returns {number[]} Segment vertex data
+     */
+    _processThreshold(threshold, ctx) {
+        const contourY = (threshold - ctx.referenceElevation) * ctx.heightScale;
+        const chunkData = [];
+
+        for (let gy = 0; gy < ctx.gh - 1; gy++) {
+            for (let gx = 0; gx < ctx.gw - 1; gx++) {
+                this._processContourCell(gx, gy, threshold, contourY, ctx, chunkData);
+            }
+        }
+
+        return chunkData;
+    }
+
+    /**
+     * Build adjacency map from segment data for chain walking.
+     * @param {number[]} data - Raw segment data (6 values per segment: ax, ay, az, bx, by, bz)
+     * @param {number} segCount - Number of segments
+     * @returns {{ adj: Map, key: Function }} Adjacency map and key function
+     */
+    _buildSegmentAdjacency(data, segCount) {
         const adj = new Map();
         const key = (x, z) => x + ',' + z;
 
@@ -1445,6 +1558,49 @@ export class TerrainMesh {
             lb.push({ seg: i, end: 1 });
         }
 
+        return { adj, key };
+    }
+
+    /**
+     * Walk a chain of segments in one direction from a starting endpoint.
+     * @param {Map} adj - Adjacency map
+     * @param {string} startKey - Starting endpoint key
+     * @param {Uint8Array} used - Used segment flags (mutated)
+     * @param {number[]} data - Raw segment data
+     * @param {Function} key - Key function for endpoint coordinates
+     * @returns {number[]} Flat array of [x, z, x, z, ...] walked points
+     */
+    _walkChain(adj, startKey, used, data, key) {
+        const points = [];
+        let curKey = startKey;
+        for (;;) {
+            const neighbors = adj.get(curKey);
+            if (!neighbors) break;
+            let found = false;
+            for (const n of neighbors) {
+                if (used[n.seg]) continue;
+                used[n.seg] = 1;
+                const off = n.end === 0 ? n.seg * 6 + 3 : n.seg * 6;
+                const nx = data[off], nz = data[off + 2];
+                points.push(nx, nz);
+                curKey = key(nx, nz);
+                found = true;
+                break;
+            }
+            if (!found) break;
+        }
+        return points;
+    }
+
+    /**
+     * Chain raw marching-squares segments into polylines, simplify, then emit.
+     */
+    _chainAndSimplifySegments(data, contourY, tolerance) {
+        const segCount = data.length / 6;
+        if (segCount === 0) return data;
+
+        const { adj, key } = this._buildSegmentAdjacency(data, segCount);
+
         const used = new Uint8Array(segCount);
         const result = [];
 
@@ -1455,43 +1611,8 @@ export class TerrainMesh {
             const ax = data[i * 6], az = data[i * 6 + 2];
             const bx = data[i * 6 + 3], bz = data[i * 6 + 5];
 
-            const fwd = [];
-            let curKey = key(bx, bz);
-            for (;;) {
-                const neighbors = adj.get(curKey);
-                if (!neighbors) break;
-                let found = false;
-                for (const n of neighbors) {
-                    if (used[n.seg]) continue;
-                    used[n.seg] = 1;
-                    const off = n.end === 0 ? n.seg * 6 + 3 : n.seg * 6;
-                    const nx = data[off], nz = data[off + 2];
-                    fwd.push(nx, nz);
-                    curKey = key(nx, nz);
-                    found = true;
-                    break;
-                }
-                if (!found) break;
-            }
-
-            const bwd = [];
-            curKey = key(ax, az);
-            for (;;) {
-                const neighbors = adj.get(curKey);
-                if (!neighbors) break;
-                let found = false;
-                for (const n of neighbors) {
-                    if (used[n.seg]) continue;
-                    used[n.seg] = 1;
-                    const off = n.end === 0 ? n.seg * 6 + 3 : n.seg * 6;
-                    const nx = data[off], nz = data[off + 2];
-                    bwd.push(nx, nz);
-                    curKey = key(nx, nz);
-                    found = true;
-                    break;
-                }
-                if (!found) break;
-            }
+            const fwd = this._walkChain(adj, key(bx, bz), used, data, key);
+            const bwd = this._walkChain(adj, key(ax, az), used, data, key);
 
             const polyLen = (bwd.length / 2) + 2 + (fwd.length / 2);
             const poly = new Array(polyLen);
@@ -1566,8 +1687,15 @@ export class TerrainMesh {
 
     /**
      * Interpolate crossing position along a marching squares cell edge.
+     * @param {number} edge - Edge index (0=top, 1=right, 2=bottom, 3=left)
+     * @param {number} threshold - Contour threshold value
+     * @param {{tl: number, tr: number, br: number, bl: number}} corners - Corner elevation values
+     * @param {{x0: number, x1: number, z0: number, z1: number}} bounds - Cell spatial bounds
+     * @returns {number[]} [x, z, t] interpolated position and parameter
      */
-    _interpolateEdge(edge, threshold, tl, tr, br, bl, x0, x1, z0, z1) {
+    _interpolateEdge(edge, threshold, corners, bounds) {
+        const { tl, tr, br, bl } = corners;
+        const { x0, x1, z0, z1 } = bounds;
         let t;
         switch (edge) {
             case 0:

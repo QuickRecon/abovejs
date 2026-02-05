@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import { createTextSprite, updateTextSprite, throttle, clampedElementScale } from './ToolUtils.js';
+import { createTextSprite, throttle, clampedElementScale } from './ToolUtils.js';
 
 export class MeasureTool {
     constructor() {
@@ -71,7 +71,7 @@ export class MeasureTool {
         this.group.add(this.label);
 
         // Highlight rings for each dot
-        const ringGeo = new THREE.RingGeometry(0.012, 0.020, 24);
+        const ringGeo = new THREE.RingGeometry(0.012, 0.02, 24);
         const ringMat = new THREE.MeshBasicMaterial({
             color: 0xff4444,
             side: THREE.DoubleSide,
@@ -189,7 +189,7 @@ export class MeasureTool {
         // Horizontal distance in model space -> real-world
         const dx = bx - ax;
         const dz = bz - az;
-        const hDistModel = Math.sqrt(dx * dx + dz * dz);
+        const hDistModel = Math.hypot(dx, dz);
         const hDist = hDistModel * scale;
 
         // Get raw elevations for 3D distance and height difference
@@ -207,7 +207,7 @@ export class MeasureTool {
 
             if (Number.isFinite(elevA) && Number.isFinite(elevB)) {
                 const elevDiff = elevB - elevA;
-                const dist3D = Math.sqrt(hDist * hDist + elevDiff * elevDiff);
+                const dist3D = Math.hypot(hDist, elevDiff);
                 this._renderLabel(hDist, elevDiff, dist3D);
             } else {
                 this._renderLabel(hDist, null, null);

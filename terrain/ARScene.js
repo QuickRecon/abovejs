@@ -440,7 +440,9 @@ export class ARScene {
         // - Compensate for viewer pose drift so the model stays world-anchored
         // - Keep submitting frames — Quest ATW is rotation-only, so skipping
         //   frames would make the content fully head-locked
-        if (!this.isSessionPaused) {
+        if (this.isSessionPaused) {
+            this._compensatePauseDrift(frame);
+        } else {
             // Save viewer position each frame for pause drift reference
             this._saveViewerPosition(frame);
 
@@ -456,8 +458,6 @@ export class ARScene {
             if (this.onRender) {
                 this.onRender(time, frame);
             }
-        } else {
-            this._compensatePauseDrift(frame);
         }
 
         // ALWAYS render the scene - required for WebXR pose tracking

@@ -120,7 +120,7 @@ export class OverlayLayers {
         if (!group) return;
 
         group.traverse((child) => {
-            if (child.geometry && child.geometry.attributes.position) {
+            if (child.geometry?.attributes.position) {
                 const positions = child.geometry.attributes.position;
                 for (let i = 0; i < positions.count; i++) {
                     const y = positions.getY(i);
