@@ -1,0 +1,7 @@
+[
+    { "name": "Wellington", "file": "Examples/Wellington.tif", "size": "6.1 MB" },
+    { "name": "Stockton", "file": "Examples/Stockton.tif", "size": "2.8 MB" },
+    { "name": "Swan River", "file": "Examples/swanriver_cog.tif", "size": "16 MB" },
+    { "name": "Kepwari", "file": "Examples/kepwari_cog.tif", "size": "617 KB" },
+    { "name": "Logue Brook", "file": "Examples/loguebrook.tif", "size": "463 KB" }
+]

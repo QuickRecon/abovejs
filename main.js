@@ -27,6 +27,9 @@ let lastContourResult = null;
 // Maximum contour vertices before auto-hiding for performance
 const MAX_CONTOUR_VERTICES = 2_000_000;
 
+// Whether contours were auto-disabled due to exceeding vertex limit
+let contoursExceedLimit = false;
+
 // Elevation analysis results
 let elevationInfo = {
     minElevation: 0,
@@ -230,8 +233,17 @@ async function buildTerrain(cogData) {
     const modelContainer = arManager.getModelContainer();
     const renderer = arScene.getRenderer();
 
+    // Read landing page options
+    const targetPolygons = parseInt(document.getElementById('polygon-count').value, 10);
+    const contoursEnabled = document.getElementById('landing-contour-toggle').checked;
+    const landingContourInterval = parseFloat(document.getElementById('landing-contour-interval').value);
+
+    // Sync contour settings to viewer sidebar
+    document.getElementById('contour-toggle').checked = contoursEnabled;
+    document.getElementById('contour-interval').value = landingContourInterval;
+
     // Create terrain mesh
-    terrainMesh = new TerrainMesh();
+    terrainMesh = new TerrainMesh({ targetPolygons });
     terrainMesh.setElevationConfig(
         elevationInfo.referenceElevation,
         elevationInfo.depthRange,
@@ -265,10 +277,11 @@ async function buildTerrain(cogData) {
     overlayLayers.init(modelContainer, terrainMesh);
     arManager.setOverlayLayers(overlayLayers);
 
-    // Generate contours
-    onProgress('CREATE_CONTOURS', null);
-    const contourInterval = parseFloat(document.getElementById('contour-interval').value);
-    await generateContours(contourInterval, onProgress);
+    // Generate contours (if enabled on landing page)
+    if (contoursEnabled) {
+        onProgress('CREATE_CONTOURS', null);
+        await generateContours(landingContourInterval, onProgress);
+    }
 
     // Set up hand tracking for AR
     handTracking = new HandTracking();
@@ -320,13 +333,22 @@ async function generateContours(interval, onProgress) {
 
     lastContourResult = result;
 
-    if (result && result.vertexCount > 0) {
-        overlayLayers.createContoursFromSegments(result.segments, result.vertexCount);
+    const contourToggle = document.getElementById('contour-toggle');
+    const limitNote = document.getElementById('contour-limit-note');
 
+    if (result && result.vertexCount > 0) {
         if (result.vertexCount > MAX_CONTOUR_VERTICES) {
-            console.warn(`Contours exceed ${(MAX_CONTOUR_VERTICES / 1e6).toFixed(0)}M vertices (${(result.vertexCount / 1e6).toFixed(1)}M) — hidden for performance. Use a larger interval or toggle on manually.`);
+            console.warn(`Contours exceed ${(MAX_CONTOUR_VERTICES / 1e6).toFixed(0)}M vertices (${(result.vertexCount / 1e6).toFixed(1)}M) — disabled. Use a larger interval.`);
+            contoursExceedLimit = true;
+            contourToggle.checked = false;
+            contourToggle.disabled = true;
+            limitNote.style.display = 'block';
             overlayLayers.setVisibility('contours', false);
-            document.getElementById('contour-toggle').checked = false;
+        } else {
+            contoursExceedLimit = false;
+            contourToggle.disabled = false;
+            limitNote.style.display = 'none';
+            overlayLayers.createContoursFromSegments(result.segments, result.vertexCount);
         }
     }
 }
@@ -577,9 +599,11 @@ function initEventHandlers() {
                 terrainMesh.setElevationConfig(val, elevationInfo.depthRange, elevationInfo.noDataValue);
                 await terrainMesh.updateReferenceElevation(val);
 
-                // Regenerate contours
-                const interval = parseFloat(document.getElementById('contour-interval').value);
-                await generateContours(interval);
+                // Regenerate contours (skip if they exceeded the limit)
+                if (!contoursExceedLimit) {
+                    const interval = parseFloat(document.getElementById('contour-interval').value);
+                    await generateContours(interval);
+                }
             }
         }, 150);
     });
@@ -595,7 +619,7 @@ function initEventHandlers() {
         if (terrainMesh) {
             terrainMesh.setZExaggeration(val);
         }
-        if (overlayLayers) {
+        if (overlayLayers && !contoursExceedLimit) {
             overlayLayers.updateForZExaggeration();
         }
     });
@@ -610,6 +634,10 @@ function initEventHandlers() {
     // Contour visibility toggle
     const contourToggle = document.getElementById('contour-toggle');
     contourToggle.addEventListener('change', () => {
+        if (contoursExceedLimit) {
+            contourToggle.checked = false;
+            return;
+        }
         if (overlayLayers) {
             overlayLayers.setVisibility('contours', contourToggle.checked);
         }
@@ -646,7 +674,36 @@ function initEventHandlers() {
 }
 
 // ============================================
+// Examples
+// ============================================
+
+async function loadExamplesList() {
+    try {
+        const resp = await fetch('examples.json');
+        if (!resp.ok) return;
+        const examples = await resp.json();
+        if (!Array.isArray(examples) || examples.length === 0) return;
+
+        const list = document.getElementById('examples-list');
+        for (const ex of examples) {
+            const btn = document.createElement('button');
+            btn.className = 'example-btn';
+            btn.innerHTML = `${ex.name}<span class="example-size">${ex.size}</span>`;
+            btn.addEventListener('click', () => {
+                handleLoad(() => loadCOGFromUrl(ex.file));
+            });
+            list.appendChild(btn);
+        }
+
+        document.getElementById('examples-section').style.display = '';
+    } catch {
+        // Silently ignore — examples section stays hidden
+    }
+}
+
+// ============================================
 // Initialize
 // ============================================
 
 initEventHandlers();
+loadExamplesList();
