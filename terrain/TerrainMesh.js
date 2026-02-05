@@ -400,23 +400,14 @@ export class TerrainMesh {
                 const isNoData01 = this._isNoData(v01);
                 const isNoData11 = this._isNoData(v11);
 
-                if (isNoData00 && isNoData10 && isNoData01 && isNoData11) {
+                if (isNoData00 || isNoData10 || isNoData01 || isNoData11) {
+                    // Preserve NoData if any neighbor is NoData to avoid
+                    // filling small holes and creating normal map artifacts
                     newData[y * newWidth + x] = 1e38;
                 } else {
-                    const validValues = [];
-                    const weights = [];
-
-                    if (!isNoData00) { validValues.push(v00); weights.push((1 - fx) * (1 - fy)); }
-                    if (!isNoData10) { validValues.push(v10); weights.push(fx * (1 - fy)); }
-                    if (!isNoData01) { validValues.push(v01); weights.push((1 - fx) * fy); }
-                    if (!isNoData11) { validValues.push(v11); weights.push(fx * fy); }
-
-                    let totalWeight = weights.reduce((a, b) => a + b, 0);
-                    let value = 0;
-                    for (let i = 0; i < validValues.length; i++) {
-                        value += validValues[i] * (weights[i] / totalWeight);
-                    }
-                    newData[y * newWidth + x] = value;
+                    const vA = v00 * (1 - fx) + v10 * fx;
+                    const vB = v01 * (1 - fx) + v11 * fx;
+                    newData[y * newWidth + x] = vA * (1 - fy) + vB * fy;
                 }
             }
         }
@@ -550,8 +541,11 @@ export class TerrainMesh {
         );
         this.elevationTexture.wrapS = THREE.ClampToEdgeWrapping;
         this.elevationTexture.wrapT = THREE.ClampToEdgeWrapping;
-        this.elevationTexture.minFilter = THREE.LinearFilter;
-        this.elevationTexture.magFilter = THREE.LinearFilter;
+        // NearestFilter prevents GPU bilinear interpolation from blending
+        // valid elevation values with NoData (1e38), which would produce
+        // garbage intermediate heights at NoData boundaries.
+        this.elevationTexture.minFilter = THREE.NearestFilter;
+        this.elevationTexture.magFilter = THREE.NearestFilter;
         this.elevationTexture.needsUpdate = true;
 
         console.log(`Created elevation texture: ${this.elevationWidth}x${this.elevationHeight}`);
@@ -868,13 +862,20 @@ export class TerrainMesh {
         const triangleCount = indices.length / 3;
 
         const isBelowRef = new Uint8Array(vertexCount);
+        const isNoData = new Uint8Array(vertexCount);
         for (let i = 0; i < vertexCount; i++) {
             const u = uvs.getX(i);
-            const v = uvs.getY(i);
-            const elevation = this._sampleElevation(u, 1.0 - v);
+            const v = 1.0 - uvs.getY(i);
 
-            if (Number.isFinite(elevation) && elevation < this.referenceElevation) {
-                isBelowRef[i] = 1;
+            if (this._hasNearbyNoData(u, v)) {
+                isNoData[i] = 1;
+            } else {
+                const elevation = this._sampleElevation(u, v);
+                if (!Number.isFinite(elevation)) {
+                    isNoData[i] = 1;
+                } else if (elevation < this.referenceElevation) {
+                    isBelowRef[i] = 1;
+                }
             }
         }
 
@@ -887,7 +888,10 @@ export class TerrainMesh {
             const i1 = indices[t * 3 + 1];
             const i2 = indices[t * 3 + 2];
 
-            if (isBelowRef[i0] || isBelowRef[i1] || isBelowRef[i2]) {
+            // Exclude triangles containing any NoData vertex
+            if (isNoData[i0] || isNoData[i1] || isNoData[i2]) {
+                filteredCount++;
+            } else if (isBelowRef[i0] || isBelowRef[i1] || isBelowRef[i2]) {
                 newIndices.push(i0, i1, i2);
             } else {
                 filteredCount++;
@@ -989,6 +993,28 @@ export class TerrainMesh {
     }
 
     /**
+     * Check if any texel in the bilinear sampling neighborhood is NoData.
+     * Used by the triangle filter to match what the GPU might sample.
+     * @param {number} u - Normalized X (0-1)
+     * @param {number} v - Normalized Y (0-1)
+     * @returns {boolean}
+     */
+    _hasNearbyNoData(u, v) {
+        const x = u * (this.elevationWidth - 1);
+        const y = v * (this.elevationHeight - 1);
+        const x0 = Math.floor(x);
+        const y0 = Math.floor(y);
+        const x1 = Math.min(x0 + 1, this.elevationWidth - 1);
+        const y1 = Math.min(y0 + 1, this.elevationHeight - 1);
+        const w = this.elevationWidth;
+        const d = this.elevationData;
+        return this._isNoData(d[y0 * w + x0])
+            || this._isNoData(d[y0 * w + x1])
+            || this._isNoData(d[y1 * w + x0])
+            || this._isNoData(d[y1 * w + x1]);
+    }
+
+    /**
      * Get elevation at a specific grid cell.
      * @param {number} x
      * @param {number} y
@@ -1029,9 +1055,12 @@ export class TerrainMesh {
         const v01 = this._getElevationAt(x0, y1);
         const v11 = this._getElevationAt(x1, y1);
 
-        const values = [v00, v10, v01, v11].filter(val => Number.isFinite(val));
-        if (values.length === 0) return Number.NaN;
-        if (values.length < 4) return values.reduce((a, b) => a + b, 0) / values.length;
+        // If any neighbor is NoData, treat this sample as NoData to avoid
+        // creating false elevation values at boundaries
+        if (!Number.isFinite(v00) || !Number.isFinite(v10) ||
+            !Number.isFinite(v01) || !Number.isFinite(v11)) {
+            return Number.NaN;
+        }
 
         const vA = v00 * (1 - fx) + v10 * fx;
         const vB = v01 * (1 - fx) + v11 * fx;
@@ -1173,9 +1202,10 @@ export class TerrainMesh {
      * @param {number} heightOffset - Small Y offset to prevent z-fighting
      * @param {Function} [onProgress]
      * @param {number} [simplifyTolerance=0]
-     * @returns {{ segments: Float32Array, vertexCount: number }}
+     * @param {number} [maxVertices=0] - Abort if vertex count exceeds this (0 = no limit)
+     * @returns {{ segments: Float32Array, vertexCount: number, aborted: boolean }}
      */
-    async generateContours(referenceElevation, minElevation, interval, heightOffset, onProgress, simplifyTolerance = 0) {
+    async generateContours(referenceElevation, minElevation, interval, heightOffset, onProgress, simplifyTolerance = 0, maxVertices = 0) {
         if (!this.elevationData || !this.gridWidth || !this.gridHeight) return null;
 
         const gw = this.gridWidth;
@@ -1263,11 +1293,25 @@ export class TerrainMesh {
                     const z0 = modelZ[gy];
                     const z1 = modelZ[gy + 1];
 
+                    // Compute surface normal from cell gradient for offset direction
+                    const cellW = x1 - x0;
+                    const cellH = z1 - z0;
+                    const gradX = ((tr + br) - (tl + bl)) * 0.5 / cellW * heightScale;
+                    const gradZ = ((bl + br) - (tl + tr)) * 0.5 / cellH * heightScale;
+                    // Surface normal (unnormalized): (-gradX, 1, -gradZ)
+                    const nLen = Math.sqrt(gradX * gradX + 1 + gradZ * gradZ);
+                    const nx = -gradX / nLen;
+                    const ny = 1 / nLen;
+                    const nz = -gradZ / nLen;
+
                     for (const [e0, e1] of edges) {
                         const p0 = this._interpolateEdge(e0, threshold, tl, tr, br, bl, x0, x1, z0, z1);
                         const p1 = this._interpolateEdge(e1, threshold, tl, tr, br, bl, x0, x1, z0, z1);
 
-                        chunkData.push(p0[0], contourY, p0[1], p1[0], contourY, p1[1]);
+                        chunkData.push(
+                            p0[0] + nx * heightOffset, contourY + ny * heightOffset, p0[1] + nz * heightOffset,
+                            p1[0] + nx * heightOffset, contourY + ny * heightOffset, p1[1] + nz * heightOffset
+                        );
                     }
                 }
             }
@@ -1284,6 +1328,12 @@ export class TerrainMesh {
             }
 
             if (onProgress) onProgress((ti + 1) / thresholds.length);
+
+            if (maxVertices > 0 && totalVertices > maxVertices) {
+                console.warn(`Contour vertex limit (${(maxVertices / 1e6).toFixed(0)}M) exceeded at threshold ${ti + 1}/${thresholds.length} — aborting`);
+                return { segments: new Float32Array(0), vertexCount: totalVertices, aborted: true };
+            }
+
             await new Promise(r => setTimeout(r, 0));
         }
 
@@ -1295,7 +1345,7 @@ export class TerrainMesh {
         }
 
         console.log(`Generated ${totalVertices / 2} contour segments (${thresholds.length} thresholds, ${gw}x${gh} grid, simplify=${simplifyTolerance})`);
-        return { segments, vertexCount: totalVertices };
+        return { segments, vertexCount: totalVertices, aborted: false };
     }
 
     /**

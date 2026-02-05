@@ -97,23 +97,25 @@
                 </div>
             </div>
 
-            <div class="control-group">
-                <label for="contour-interval">Contour Interval</label>
-                <select id="contour-interval">
-                    <option value="0.5">0.5 m</option>
-                    <option value="1" selected>1 m</option>
-                    <option value="2">2 m</option>
-                    <option value="5">5 m</option>
-                    <option value="10">10 m</option>
-                </select>
-            </div>
+            <div id="contour-controls">
+                <div class="control-group">
+                    <label for="contour-interval">Contour Interval</label>
+                    <select id="contour-interval">
+                        <option value="0.5">0.5 m</option>
+                        <option value="1" selected>1 m</option>
+                        <option value="2">2 m</option>
+                        <option value="5">5 m</option>
+                        <option value="10">10 m</option>
+                    </select>
+                </div>
 
-            <div class="control-group">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="contour-toggle" checked>
-                    Show Contours
-                </label>
-                <p id="contour-limit-note" class="limit-note" style="display: none;">Contours too numerous — try reloading with a wider spacing</p>
+                <div class="control-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="contour-toggle" checked>
+                        Show Contours
+                    </label>
+                    <p id="contour-limit-note" class="limit-note" style="display: none;">Contours too numerous — try reloading with a wider spacing</p>
+                </div>
             </div>
 
             <div class="control-group info-group">
@@ -124,6 +126,7 @@
             </div>
 
             <button id="enter-ar-btn" style="display: none;">Enter AR</button>
+            <button id="exit-ar-btn" style="display: none;">Exit AR</button>
             <button id="load-new-btn">Load New File</button>
         </div>
     </div>

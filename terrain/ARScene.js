@@ -421,7 +421,9 @@ export class ARScene {
      */
     stop() {
         this.isRunning = false;
-        this.renderer.setAnimationLoop(null);
+        if (this.renderer) {
+            this.renderer.setAnimationLoop(null);
+        }
     }
 
     /**

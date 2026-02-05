@@ -271,11 +271,11 @@ export class ARManager {
     /**
      * Handle XR session end.
      */
-    _onSessionEnd() {
+    async _onSessionEnd() {
         console.log('AR session ended');
         this.xrSession = null;
         this.detachReusableContent();
-        this.exitMode();
+        await this.exitMode();
 
         if (this.onSessionEnd) {
             this.onSessionEnd();

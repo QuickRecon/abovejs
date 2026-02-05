@@ -211,11 +211,12 @@ async function buildTerrain(cogData) {
     // Update UI controls with analyzed values
     updateControlsFromData();
 
-    // Show loading overlay
-    loadingProgress = new LoadingProgress(document.body);
-    loadingProgress.show();
-    loadingProgress.setStage('LOAD_COG');
-    loadingProgress.setProgress(100);
+    // Loading overlay is already visible (shown by handleLoad before COG read).
+    // Advance to LOAD_COG complete state.
+    if (loadingProgress) {
+        loadingProgress.setStage('LOAD_COG');
+        loadingProgress.setProgress(100);
+    }
 
     // Create AR manager in desktop 3D mode
     const viewerContainer = document.getElementById('viewer-container');
@@ -241,6 +242,7 @@ async function buildTerrain(cogData) {
     // Sync contour settings to viewer sidebar
     document.getElementById('contour-toggle').checked = contoursEnabled;
     document.getElementById('contour-interval').value = landingContourInterval;
+    document.getElementById('contour-controls').style.display = contoursEnabled ? '' : 'none';
 
     // Create terrain mesh
     terrainMesh = new TerrainMesh({ targetPolygons });
@@ -293,9 +295,11 @@ async function buildTerrain(cogData) {
     });
     arManager.setHandTracking(handTracking);
 
-    // When AR session ends, rebuild the desktop 3D scene with existing terrain
+    // When AR session ends (externally or via exit button), rebuild desktop 3D
     arManager.onSessionEnd = async () => {
         console.log('AR session ended — rebuilding desktop 3D scene');
+        document.getElementById('exit-ar-btn').style.display = 'none';
+        document.getElementById('enter-ar-btn').style.display = 'block';
         await arManager.enterDesktop3DMode();
         rebuildSceneContents();
     };
@@ -326,9 +330,10 @@ async function generateContours(interval, onProgress) {
         elevationInfo.referenceElevation,
         elevationInfo.minElevation,
         interval,
-        0.000001,
+        0.0008,
         onProgress ? (p) => onProgress('CREATE_CONTOURS', p) : null,
-        0.0001 // simplify tolerance
+        0.0001, // simplify tolerance
+        MAX_CONTOUR_VERTICES
     );
 
     lastContourResult = result;
@@ -336,20 +341,17 @@ async function generateContours(interval, onProgress) {
     const contourToggle = document.getElementById('contour-toggle');
     const limitNote = document.getElementById('contour-limit-note');
 
-    if (result && result.vertexCount > 0) {
-        if (result.vertexCount > MAX_CONTOUR_VERTICES) {
-            console.warn(`Contours exceed ${(MAX_CONTOUR_VERTICES / 1e6).toFixed(0)}M vertices (${(result.vertexCount / 1e6).toFixed(1)}M) — disabled. Use a larger interval.`);
-            contoursExceedLimit = true;
-            contourToggle.checked = false;
-            contourToggle.disabled = true;
-            limitNote.style.display = 'block';
-            overlayLayers.setVisibility('contours', false);
-        } else {
-            contoursExceedLimit = false;
-            contourToggle.disabled = false;
-            limitNote.style.display = 'none';
-            overlayLayers.createContoursFromSegments(result.segments, result.vertexCount);
-        }
+    if (result?.aborted) {
+        contoursExceedLimit = true;
+        contourToggle.checked = false;
+        contourToggle.disabled = true;
+        limitNote.style.display = 'block';
+        overlayLayers.setVisibility('contours', false);
+    } else if (result && result.vertexCount > 0) {
+        contoursExceedLimit = false;
+        contourToggle.disabled = false;
+        limitNote.style.display = 'none';
+        overlayLayers.createContoursFromSegments(result.segments, result.vertexCount);
     }
 }
 
@@ -484,6 +486,8 @@ function showLanding() {
     }
     handTracking = null;
     lastContourResult = null;
+    currentCOGUrl = null;
+    history.replaceState(null, '', window.location.pathname);
 
     // Clear the viewer container
     const container = document.getElementById('viewer-container');
@@ -497,10 +501,20 @@ function showLanding() {
 async function handleLoad(loader) {
     try {
         showViewer();
+
+        // Show loading overlay immediately so the user sees feedback
+        // before the (potentially slow) COG read begins
+        loadingProgress = new LoadingProgress(document.body);
+        loadingProgress.show();
+
         const cogData = await loader();
         await buildTerrain(cogData);
     } catch (err) {
         console.error('Failed to load COG:', err);
+        if (loadingProgress) {
+            loadingProgress.hide();
+            loadingProgress = null;
+        }
         showError(`Failed to load: ${err.message}`);
         showLanding();
     }
@@ -571,6 +585,8 @@ function initEventHandlers() {
             showError('Please enter a URL');
             return;
         }
+        currentCOGUrl = url;
+        updateBrowserURL(url);
         handleLoad(() => loadCOGFromUrl(url));
     });
 
@@ -622,6 +638,7 @@ function initEventHandlers() {
         if (overlayLayers && !contoursExceedLimit) {
             overlayLayers.updateForZExaggeration();
         }
+        updateBrowserURL(currentCOGUrl);
     });
 
     // Contour interval
@@ -629,6 +646,7 @@ function initEventHandlers() {
     contourInterval.addEventListener('change', async () => {
         const interval = parseFloat(contourInterval.value);
         await generateContours(interval);
+        updateBrowserURL(currentCOGUrl);
     });
 
     // Contour visibility toggle
@@ -641,16 +659,23 @@ function initEventHandlers() {
         if (overlayLayers) {
             overlayLayers.setVisibility('contours', contourToggle.checked);
         }
+        updateBrowserURL(currentCOGUrl);
     });
 
     // Enter AR button
-    document.getElementById('enter-ar-btn').addEventListener('click', async () => {
+    const enterArBtn = document.getElementById('enter-ar-btn');
+    const exitArBtn = document.getElementById('exit-ar-btn');
+
+    enterArBtn.addEventListener('click', async () => {
         if (!arManager) return;
 
         // enterARMode() acquires the XR session (needs user gesture),
         // then disposes the old scene and creates a new one
         const success = await arManager.enterARMode();
         if (!success) return;
+
+        enterArBtn.style.display = 'none';
+        exitArBtn.style.display = 'block';
 
         // Rebuild terrain/overlays into the new AR scene's model container
         rebuildSceneContents();
@@ -667,11 +692,93 @@ function initEventHandlers() {
         }
     });
 
+    // Exit AR button
+    exitArBtn.addEventListener('click', async () => {
+        if (!arManager) return;
+        arManager.detachReusableContent();
+        await arManager.exitMode();
+        await arManager.enterDesktop3DMode();
+        rebuildSceneContents();
+        exitArBtn.style.display = 'none';
+        enterArBtn.style.display = 'block';
+    });
+
     // Load new file button
     document.getElementById('load-new-btn').addEventListener('click', () => {
         showLanding();
     });
 }
+
+// ============================================
+// URL Parameters
+// ============================================
+
+/**
+ * Read settings from URL search params and apply to landing page controls.
+ * @returns {URLSearchParams}
+ */
+function applyURLParams() {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.has('polygons')) {
+        const el = document.getElementById('polygon-count');
+        const val = params.get('polygons');
+        if ([...el.options].some(o => o.value === val)) el.value = val;
+    }
+    if (params.has('contours')) {
+        document.getElementById('landing-contour-toggle').checked = params.get('contours') !== '0';
+    }
+    if (params.has('interval')) {
+        const el = document.getElementById('landing-contour-interval');
+        const val = params.get('interval');
+        if ([...el.options].some(o => o.value === val)) el.value = val;
+    }
+    if (params.has('zexag')) {
+        const val = parseFloat(params.get('zexag'));
+        if (val >= 1 && val <= 10) {
+            document.getElementById('z-exag-slider').value = val;
+            document.getElementById('z-exag-value').textContent = `${val.toFixed(1)}x`;
+        }
+    }
+
+    return params;
+}
+
+/**
+ * Build a shareable URL from the current COG URL and settings.
+ * @param {string} cogUrl
+ * @returns {string}
+ */
+function buildShareURL(cogUrl) {
+    const params = new URLSearchParams();
+    params.set('url', cogUrl);
+    params.set('polygons', document.getElementById('polygon-count').value);
+
+    // Read from viewer sidebar if active, otherwise from landing page
+    const viewerActive = document.getElementById('viewer').style.display !== 'none';
+    if (viewerActive) {
+        params.set('contours', document.getElementById('contour-toggle').checked ? '1' : '0');
+        params.set('interval', document.getElementById('contour-interval').value);
+    } else {
+        params.set('contours', document.getElementById('landing-contour-toggle').checked ? '1' : '0');
+        params.set('interval', document.getElementById('landing-contour-interval').value);
+    }
+    params.set('zexag', document.getElementById('z-exag-slider').value);
+    return `${window.location.pathname}?${params}`;
+}
+
+/**
+ * Update browser URL bar without navigation.
+ * @param {string} cogUrl
+ */
+function updateBrowserURL(cogUrl) {
+    if (!cogUrl) return;
+    const shareURL = buildShareURL(cogUrl);
+    history.replaceState(null, '', shareURL);
+}
+
+// Track the loaded COG URL for URL updates
+let currentCOGUrl = null;
 
 // ============================================
 // Examples
@@ -686,13 +793,25 @@ async function loadExamplesList() {
 
         const list = document.getElementById('examples-list');
         for (const ex of examples) {
-            const btn = document.createElement('button');
-            btn.className = 'example-btn';
-            btn.innerHTML = `${ex.name}<span class="example-size">${ex.size}</span>`;
-            btn.addEventListener('click', () => {
-                handleLoad(() => loadCOGFromUrl(ex.file));
+            const link = document.createElement('a');
+            link.className = 'example-btn';
+            link.innerHTML = `${ex.name}<span class="example-size">${ex.size}</span>`;
+            // Build href with current landing page settings
+            link.href = buildShareURL(ex.file);
+            list.appendChild(link);
+        }
+
+        // Update example hrefs when landing page settings change
+        const settingEls = ['polygon-count', 'landing-contour-toggle', 'landing-contour-interval'];
+        for (const id of settingEls) {
+            document.getElementById(id).addEventListener('change', () => {
+                const links = list.querySelectorAll('.example-btn');
+                let i = 0;
+                for (const ex of examples) {
+                    if (links[i]) links[i].href = buildShareURL(ex.file);
+                    i++;
+                }
             });
-            list.appendChild(btn);
         }
 
         document.getElementById('examples-section').style.display = '';
@@ -705,5 +824,15 @@ async function loadExamplesList() {
 // Initialize
 // ============================================
 
+// Apply URL params to landing page controls, then init
+const params = applyURLParams();
 initEventHandlers();
 loadExamplesList();
+
+// Auto-load from ?url= query parameter
+const urlParam = params.get('url');
+if (urlParam) {
+    currentCOGUrl = urlParam;
+    document.getElementById('url-input').value = urlParam;
+    handleLoad(() => loadCOGFromUrl(urlParam));
+}

@@ -12,7 +12,7 @@ import { disposeThreeObject } from './utils.js';
  */
 const DEFAULT_CONFIG = {
     // Height offset for contours above terrain surface
-    contourHeightOffset: 0.000001,
+    contourHeightOffset: 0.00005,
 
     // Contour line colors
     contourColor: 0x000000,
