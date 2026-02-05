@@ -11,6 +11,7 @@ import { OverlayLayers } from './terrain/OverlayLayers.js';
 import { HandTracking } from './terrain/HandTracking.js';
 import { ToolManager } from './terrain/ToolManager.js';
 import { LoadingProgress } from './terrain/LoadingProgress.js';
+import { analyzeElevation } from './elevation-analysis.js';
 
 // ============================================
 // State
@@ -139,54 +140,6 @@ async function _extractCOGData(tiff) {
         geoBounds,
         noDataValue,
         fullResElevationPromise
-    };
-}
-
-// ============================================
-// Elevation Analysis
-// ============================================
-
-/**
- * Analyze elevation data to determine min/max and reference elevation.
- * @param {Float32Array} elevation
- * @param {number|null} noDataValue
- * @returns {Object}
- */
-function analyzeElevation(elevation, noDataValue) {
-    let min = Infinity;
-    let max = -Infinity;
-    let validCount = 0;
-
-    for (let i = 0; i < elevation.length; i++) {
-        const v = elevation[i];
-
-        // Skip NoData
-        if (!Number.isFinite(v)) continue;
-        if (v >= 1e5) continue;
-        if (noDataValue !== null && v === noDataValue) continue;
-
-        if (v < min) min = v;
-        if (v > max) max = v;
-        validCount++;
-    }
-
-    const validFraction = validCount / elevation.length;
-
-    // Reference elevation = max elevation (everything is "below" the reference)
-    const referenceElevation = max;
-    const depthRange = [0, Math.max(1, Math.round(max - min))];
-
-    console.log(`Elevation analysis: min=${min.toFixed(2)}, max=${max.toFixed(2)}`);
-    console.log(`Valid fraction: ${(validFraction * 100).toFixed(1)}%`);
-    console.log(`Reference elevation: ${referenceElevation.toFixed(2)}`);
-    console.log(`Depth range: [${depthRange[0]}, ${depthRange[1]}]`);
-
-    return {
-        minElevation: min,
-        maxElevation: max,
-        referenceElevation,
-        depthRange,
-        validFraction
     };
 }
 
