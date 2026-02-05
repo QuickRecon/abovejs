@@ -1086,6 +1086,16 @@ export class TerrainMesh {
         }
     }
 
+    /**
+     * Set the normal map strength.
+     * @param {number} scale - Normal map intensity (0 = flat, higher = stronger)
+     */
+    setNormalScale(scale) {
+        if (this.material?.uniforms?.normalScale) {
+            this.material.uniforms.normalScale.value = scale;
+        }
+    }
+
     getZExaggeration() {
         return this.zExaggeration;
     }

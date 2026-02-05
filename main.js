@@ -106,8 +106,8 @@ async function _extractCOGData(tiff) {
 
     // Start full-res read in parallel for normal map generation
     const fullResElevationPromise = (async () => {
-        // For normal map, use up to 2048px on longest side
-        const maxNormalDim = 2048;
+        // For normal map, use up to 4096px on longest side
+        const maxNormalDim = 4096;
         const normalScale = Math.min(1, maxNormalDim / Math.max(width, height));
         const normalWidth = Math.round(width * normalScale);
         const normalHeight = Math.round(height * normalScale);
@@ -273,6 +273,10 @@ async function buildTerrain(cogData) {
         geoBounds,
         fullResElevationPromise
     }, modelContainer, onProgress);
+
+    // Apply normal scale from slider
+    const normalScaleVal = parseFloat(document.getElementById('normal-strength-slider').value);
+    terrainMesh.setNormalScale(normalScaleVal);
 
     // Create overlay layers (contours)
     overlayLayers = new OverlayLayers();
@@ -641,6 +645,20 @@ function initEventHandlers() {
         updateBrowserURL(currentCOGUrl);
     });
 
+    // Normal map strength slider
+    const normalSlider = document.getElementById('normal-strength-slider');
+    const normalValue = document.getElementById('normal-strength-value');
+
+    normalSlider.addEventListener('input', () => {
+        const val = parseFloat(normalSlider.value);
+        normalValue.textContent = `${val.toFixed(1)}`;
+
+        if (terrainMesh) {
+            terrainMesh.setNormalScale(val);
+        }
+        updateBrowserURL(currentCOGUrl);
+    });
+
     // Contour interval
     const contourInterval = document.getElementById('contour-interval');
     contourInterval.addEventListener('change', async () => {
@@ -740,6 +758,13 @@ function applyURLParams() {
             document.getElementById('z-exag-value').textContent = `${val.toFixed(1)}x`;
         }
     }
+    if (params.has('normalScale')) {
+        const val = parseFloat(params.get('normalScale'));
+        if (val >= 0 && val <= 10) {
+            document.getElementById('normal-strength-slider').value = val;
+            document.getElementById('normal-strength-value').textContent = `${val.toFixed(1)}`;
+        }
+    }
 
     return params;
 }
@@ -764,6 +789,7 @@ function buildShareURL(cogUrl) {
         params.set('interval', document.getElementById('landing-contour-interval').value);
     }
     params.set('zexag', document.getElementById('z-exag-slider').value);
+    params.set('normalScale', document.getElementById('normal-strength-slider').value);
     return `${window.location.pathname}?${params}`;
 }
 
