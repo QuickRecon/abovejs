@@ -38,10 +38,10 @@ Most bundled examples are derived from bathymetry surveys conducted by the [West
 
 | Example | Location | Survey ID | Method | Date |
 |---------|----------|-----------|--------|------|
-| Wellington | Wellington Dam, Peel | AS20130627 and AS20131211 | Multibeam | |
-| Swan River | Swan River | | Multibeam | |
+| Wellington | Wellington Dam, Peel | AS20130627 and AS20131211 | Multibeam | 2013 |
+| Swan River | Swan River | SC20101001 | Multibeam | 2010-01-10 |
 | Kepwari | Lake Kepwari, Collie | LK20200523 | Multibeam | 2020-05-23 |
-| Logue Brook | Logue Brook Dam | LK20240516 | Multibeam | |
+| Logue Brook | Logue Brook Dam | LK20240516 | Multibeam | 2024-05-16|
 
 The Stockton example is derived from bathymetry of Lake Stockton, a coal mine pit lake in the Collie Basin. The bathymetry was surveyed by boat with sonar in April 2010 as part of the Mine Voids Management Strategy. See Figure 17 in:
 
