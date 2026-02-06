@@ -3,5 +3,6 @@
     { "name": "Stockton", "file": "Examples/Stockton.tif", "size": "2.8 MB" },
     { "name": "Swan River", "file": "Examples/swanriver_cog.tif", "size": "16 MB" },
     { "name": "Kepwari", "file": "Examples/kepwari_cog.tif", "size": "617 KB" },
-    { "name": "Logue Brook", "file": "Examples/loguebrook_cog.tif", "size": "463 KB" }
+    { "name": "Logue Brook", "file": "Examples/loguebrook_cog.tif", "size": "463 KB" },
+    { "name": "Rottnest Island", "file": "Examples/rotto_cog.tif", "size": "2.0MB" }
 ]

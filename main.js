@@ -90,6 +90,11 @@ async function _extractCOGData(tiff) {
         if (!Number.isFinite(noDataValue)) noDataValue = null;
     }
 
+    // Detect if source data is float16 (BitsPerSample=16, SampleFormat=3)
+    // Float16 has limited precision, so noDataValue like -9999 may be stored as -10000
+    const isFloat16 = fileDirectory.BitsPerSample?.[0] === 16 &&
+                      fileDirectory.SampleFormat?.[0] === 3;
+
     // Read at a reduced resolution for the mesh (target ~1000px on longest side)
     const maxMeshDim = 1000;
     const scale = Math.min(1, maxMeshDim / Math.max(width, height));
@@ -106,6 +111,21 @@ async function _extractCOGData(tiff) {
         interleave: false
     });
     const elevation = new Float32Array(rasters[0]);
+
+    // For float16 data, the noDataValue from metadata may not match the actual
+    // stored value due to precision loss (e.g., -9999 -> -10000). Find the actual
+    // value in the raster that's close to the metadata noDataValue.
+    if (noDataValue !== null && isFloat16) {
+        const tolerance = Math.max(1, Math.abs(noDataValue) * 0.002); // ~0.2% or at least 1
+        for (let i = 0; i < Math.min(10000, elevation.length); i++) {
+            const v = elevation[i];
+            if (Number.isFinite(v) && Math.abs(v - noDataValue) <= tolerance && v !== noDataValue) {
+                console.log(`NoData precision adjustment (float16): ${noDataValue} -> ${v}`);
+                noDataValue = v;
+                break;
+            }
+        }
+    }
 
     // Start full-res read in parallel for normal map generation
     const fullResElevationPromise = (async () => {
