@@ -164,6 +164,26 @@ export class DepthProbeTool {
     }
 
     /**
+     * Get line segments for cylindrical hit testing.
+     * Returns the vertical line from label to contact sphere.
+     * @returns {Array<{start: THREE.Vector3, end: THREE.Vector3}>}
+     */
+    getInteractionSegments() {
+        const groupPos = this.group.position;
+        // Label is at group position + (0, 0.06, 0)
+        const top = new THREE.Vector3(groupPos.x, groupPos.y + 0.06, groupPos.z);
+        // Contact sphere is at group position + contactSphere.position
+        const bottom = this.contactSphere
+            ? new THREE.Vector3(
+                groupPos.x + this.contactSphere.position.x,
+                groupPos.y + this.contactSphere.position.y,
+                groupPos.z + this.contactSphere.position.z
+            )
+            : groupPos.clone();
+        return [{ start: top, end: bottom, pointIndex: 0 }];
+    }
+
+    /**
      * Set highlight state for an interaction point.
      * @param {number} idx - Point index (always 0 for depth probe)
      * @param {boolean} highlighted

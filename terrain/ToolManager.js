@@ -276,8 +276,34 @@ export class ToolManager {
     }
 
     /**
+     * Calculate distance from a point to a line segment.
+     * @param {THREE.Vector3} point
+     * @param {THREE.Vector3} segStart
+     * @param {THREE.Vector3} segEnd
+     * @returns {number}
+     */
+    _distanceToSegment(point, segStart, segEnd) {
+        const seg = new THREE.Vector3().subVectors(segEnd, segStart);
+        const segLengthSq = seg.lengthSq();
+
+        if (segLengthSq === 0) {
+            return point.distanceTo(segStart);
+        }
+
+        // Project point onto the line, clamped to segment
+        const toPoint = new THREE.Vector3().subVectors(point, segStart);
+        const t = Math.max(0, Math.min(1, toPoint.dot(seg) / segLengthSq));
+
+        const closestPoint = new THREE.Vector3()
+            .copy(segStart)
+            .addScaledVector(seg, t);
+
+        return point.distanceTo(closestPoint);
+    }
+
+    /**
      * Find the nearest interaction point (across all placed tools) to a world-
-     * space position.
+     * space position. Checks both discrete points and line segments.
      * @param {THREE.Vector3} fingerWorld
      * @returns {{ tool: object, pointIndex: number } | null}
      */
@@ -287,6 +313,22 @@ export class ToolManager {
         let nearestDist = PROXIMITY_THRESHOLD;
 
         for (const entry of this.tools) {
+            // Check line segments first (if tool provides them)
+            if (typeof entry.tool.getInteractionSegments === 'function') {
+                const segments = entry.tool.getInteractionSegments();
+                for (const seg of segments) {
+                    const startWorld = localToWorld(seg.start, this.modelContainer);
+                    const endWorld = localToWorld(seg.end, this.modelContainer);
+                    const dist = this._distanceToSegment(fingerWorld, startWorld, endWorld);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearestTool = entry.tool;
+                        nearestPointIdx = seg.pointIndex ?? 0;
+                    }
+                }
+            }
+
+            // Also check discrete points (for tools without segments, or additional points)
             const points = entry.tool.getInteractionPoints();
             for (let pi = 0; pi < points.length; pi++) {
                 const pointWorld = localToWorld(points[pi], this.modelContainer);
