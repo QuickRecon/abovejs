@@ -19,7 +19,8 @@ export const MenuState = {
 /** Tool types available in the menu */
 export const ToolType = {
     DEPTH_PROBE: 'depth_probe',
-    MEASURE: 'measure'
+    MEASURE: 'measure',
+    PROFILE: 'profile'
 };
 
 const MENU_RADIUS = 0.045; // meters (disc radius)
@@ -80,10 +81,11 @@ export class HandMenu {
         this.disc = new THREE.Mesh(discGeo, discMat);
         this.group.add(this.disc);
 
-        // Tool icons - arranged at opposite sides
+        // Tool icons - evenly spaced at 120° intervals around the disc
         const tools = [
-            { type: ToolType.DEPTH_PROBE, label: 'Depth', angle: Math.PI / 2 },
-            { type: ToolType.MEASURE, label: 'Measure', angle: -Math.PI / 2 }
+            { type: ToolType.DEPTH_PROBE, label: 'Depth', angle: Math.PI / 2 },           // top (90°)
+            { type: ToolType.PROFILE, label: 'Profile', angle: -Math.PI / 6 },            // bottom-right (-30°)
+            { type: ToolType.MEASURE, label: 'Measure', angle: -5 * Math.PI / 6 }         // bottom-left (-150°)
         ];
 
         for (const tool of tools) {
@@ -106,8 +108,8 @@ export class HandMenu {
             this.icons.push({ sprite, toolType: tool.type, angle: tool.angle });
         }
 
-        // Highlight arc (simple ring segment - we use a thin ring for simplicity)
-        const arcGeo = new THREE.RingGeometry(MENU_RADIUS * 0.75, MENU_RADIUS * 0.95, 16, 1, 0, Math.PI);
+        // Highlight arc (ring segment covering 1/3 of circle for 3 tools)
+        const arcGeo = new THREE.RingGeometry(MENU_RADIUS * 0.75, MENU_RADIUS * 0.95, 16, 1, 0, Math.PI * 2 / 3);
         const arcMat = new THREE.MeshBasicMaterial({
             color: 0x4fc3f7,
             side: THREE.DoubleSide,
@@ -298,9 +300,9 @@ export class HandMenu {
         if (closestIcon) {
             this._setState(MenuState.SELECTING);
 
-            // Highlight the selected sector
+            // Highlight the selected sector (arc is 1/3 circle, center on icon)
             this.highlightArc.visible = true;
-            this.highlightArc.rotation.z = closestIcon.angle - Math.PI / 2;
+            this.highlightArc.rotation.z = closestIcon.angle - Math.PI / 3;
 
             // Highlight icon color
             for (const icon of this.icons) {

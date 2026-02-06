@@ -98,7 +98,7 @@ Detection per frame:
 
 ### Tool Icons
 
-- Two tools: Depth Probe (angle pi/2) and Measure (angle -pi/2) -- positioned at opposite sides
+- Three tools evenly spaced at 120° intervals: Depth Probe (angle pi/2, top), Profile (angle -pi/6, bottom-right), Measure (angle -5pi/6, bottom-left)
 - ICON_OFFSET: **0.027 m** from center
 - Icons are text sprites with cyan color (0x4fc3f7), highlight to white when selected
 - Highlight arc (ring segment) rotates to selected icon's angle
@@ -199,6 +199,64 @@ Three measurements displayed on the label:
 
 - Dots: base **0.008**, world range [**0.005**, **0.025**]
 - Highlight rings: same scale as dots
+- Label: base **0.14**, world range [**0.04**, **0.18**], maintains 512:192 aspect ratio
+
+---
+
+## Profile Tool
+
+### Purpose
+
+Displays an elevation profile between two draggable endpoints with a terrain-following line. A movable marker slides along the profile showing distances from each endpoint and elevation at that point.
+
+### Visuals
+
+- Two green endpoint dots (0x4caf50): sphere radius **0.008 m**, depthTest false (distinct from red MeasureTool)
+- Cyan profile line (0x00e5ff): follows terrain surface with **80** sample points, opacity **0.9**, depthTest false
+- Gold marker dot (0xffc107): sphere radius **0.006 m**, depthTest false, slides along profile
+- Label sprite: 512x192 canvas (3 lines), fontSize **32**, spriteScale **0.14**, positioned **0.04 m** above marker
+- Highlight rings: green for endpoints (inner **0.012**, outer **0.02**), gold for marker
+
+### Three-Point Interaction System
+
+- Index 0 = dotA (profile start endpoint)
+- Index 1 = dotB (profile end endpoint)
+- Index 2 = marker (constrained to profile line)
+
+### Profile Computation (throttled at 100 ms)
+
+- Samples **80** points linearly between A and B in XZ
+- At each sample: queries terrain height via getHeightAtLocalPosition, samples raw elevation via _sampleElevation
+- Computes cumulative 3D distance along terrain-following path (real-world units via realWorldScale)
+- Stores: position (group-local), cumulative distance from A, raw elevation, normalized t value
+
+### Marker Behavior
+
+- markerT value [0, 1] determines position along profile by distance fraction
+- When grabbed (index 2): projects pinch position onto profile line, updates markerT to nearest point
+- Marker cannot leave the profile path -- always constrained to line
+
+### Label Display
+
+Three lines, centered:
+
+1. "From A: {dist}" (white) -- distance along profile from A to marker
+2. "From B: {dist}" (gray #aaaaaa) -- distance along profile from marker to B
+3. "Elev: {elevation}m" (gold #ffc107) -- interpolated raw elevation at marker position
+
+Distance formatting: same as MeasureTool (<1 m -- cm, <1000 m -- m, >=1000 m -- km)
+
+### Endpoint Grab Behavior
+
+- Same as MeasureTool: grabbed endpoint follows finger, non-grabbed endpoint terrain-snaps
+- Profile recomputed after endpoint move (throttled)
+- markerT preserved during endpoint moves (marker stays at same proportional position)
+
+### Clamped Scaling
+
+- Endpoint dots: base **0.008**, world range [**0.005**, **0.025**]
+- Marker: base **0.006**, world range [**0.004**, **0.02**]
+- Highlight rings: same scale as their respective dots
 - Label: base **0.14**, world range [**0.04**, **0.18**], maintains 512:192 aspect ratio
 
 ---

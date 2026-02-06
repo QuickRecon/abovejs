@@ -57,6 +57,9 @@ export class MeasureTool {
             opacity: 0.8,
             depthTest: false
         }));
+        // Disable frustum culling - line positions update dynamically and
+        // bounding sphere would need constant recomputation
+        this.line.frustumCulled = false;
         this.group.add(this.line);
 
         // Label at midpoint - tall enough for 3 lines of text

@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { HandMenu, ToolType } from './HandMenu.js';
 import { DepthProbeTool } from './DepthProbeTool.js';
 import { MeasureTool } from './MeasureTool.js';
+import { ProfileTool } from './ProfileTool.js';
 import { worldToLocal, localToWorld } from './ToolUtils.js';
 
 const PROXIMITY_THRESHOLD = 0.05; // 8cm in world space
@@ -157,6 +158,8 @@ export class ToolManager {
             tool = new DepthProbeTool();
         } else if (toolType === ToolType.MEASURE) {
             tool = new MeasureTool();
+        } else if (toolType === ToolType.PROFILE) {
+            tool = new ProfileTool();
         } else {
             return;
         }
