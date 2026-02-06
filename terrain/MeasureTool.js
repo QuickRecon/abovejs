@@ -18,6 +18,8 @@ export class MeasureTool {
         this.dotB = null;
         this.line = null;
         this.label = null;
+        this.directionArrowA = null;  // Arrow near A (15%)
+        this.directionArrowB = null;  // Arrow near B (85%)
 
         // State
         this.grabbedIndex = -1; // -1 = not grabbed, 0 = dotA, 1 = dotB
@@ -47,6 +49,14 @@ export class MeasureTool {
         this.dotB.position.copy(this.posB);
         this.group.add(this.dotB);
 
+        // Direction arrows (cones pointing from A toward B)
+        const arrowGeo = new THREE.ConeGeometry(0.004, 0.012, 8);
+        const arrowMat = new THREE.MeshBasicMaterial({ color: 0xff4444, depthTest: false });
+        this.directionArrowA = new THREE.Mesh(arrowGeo, arrowMat.clone());
+        this.directionArrowB = new THREE.Mesh(arrowGeo, arrowMat.clone());
+        this.group.add(this.directionArrowA);
+        this.group.add(this.directionArrowB);
+
         // Connecting line
         const lineGeo = new THREE.BufferGeometry();
         const linePositions = new Float32Array(6);
@@ -62,14 +72,14 @@ export class MeasureTool {
         this.line.frustumCulled = false;
         this.group.add(this.line);
 
-        // Label at midpoint - tall enough for 3 lines of text
+        // Label at midpoint - tall enough for 5 lines of text
         this.label = createTextSprite('--', {
-            fontSize: 32,
+            fontSize: 24,
             color: '#ffffff',
             backgroundColor: 'rgba(0,0,0,0.7)',
             canvasWidth: 512,
-            canvasHeight: 192,
-            spriteScale: 0.14
+            canvasHeight: 280,
+            spriteScale: 0.16
         });
         this.group.add(this.label);
 
@@ -113,9 +123,13 @@ export class MeasureTool {
             this.highlightA.scale.setScalar(dotS);
             this.highlightB.scale.setScalar(dotS);
 
-            const labelBase = 0.14;
-            const labelS = clampedElementScale(labelBase, cs, 0.04, 0.18);
-            const aspect = 512 / 192;
+            const arrowS = clampedElementScale(0.006, cs, 0.004, 0.02);
+            this.directionArrowA.scale.setScalar(arrowS);
+            this.directionArrowB.scale.setScalar(arrowS);
+
+            const labelBase = 0.16;
+            const labelS = clampedElementScale(labelBase, cs, 0.05, 0.20);
+            const aspect = 512 / 280;
             this.label.scale.set(labelBase * labelS, labelBase / aspect * labelS, 1);
         }
 
@@ -144,6 +158,23 @@ export class MeasureTool {
         this.highlightA.position.y += 0.001;
         this.highlightB.position.copy(this.dotB.position);
         this.highlightB.position.y += 0.001;
+
+        // Update direction arrows (positioned at 15% and 85% along line)
+        this.directionArrowA.position.lerpVectors(this.dotA.position, this.dotB.position, 0.15);
+        this.directionArrowA.position.y += 0.008; // Lift above terrain
+        this.directionArrowB.position.lerpVectors(this.dotA.position, this.dotB.position, 0.85);
+        this.directionArrowB.position.y += 0.008;
+
+        // Orient arrows to point from A toward B
+        const dir = new THREE.Vector3().subVectors(this.dotB.position, this.dotA.position);
+        if (dir.lengthSq() > 0.0001) {
+            dir.normalize();
+            // ConeGeometry points up (+Y by default), rotate to point along dir
+            const up = new THREE.Vector3(0, 1, 0);
+            const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
+            this.directionArrowA.quaternion.copy(quat);
+            this.directionArrowB.quaternion.copy(quat);
+        }
 
         this._updateLineAndLabel();
         this._throttledUpdate(terrainMesh);
@@ -175,8 +206,7 @@ export class MeasureTool {
     }
 
     /**
-     * Compute and display distances.
-     * Renders 3 lines: horizontal, height difference, and 3D distance.
+     * Compute and display distances, bearing, and azimuth.
      * @param {TerrainMesh} terrainMesh
      */
     _computeDistances(terrainMesh) {
@@ -195,7 +225,11 @@ export class MeasureTool {
         const hDistModel = Math.hypot(dx, dz);
         const hDist = hDistModel * scale;
 
-        // Get raw elevations for 3D distance and height difference
+        // Bearing: angle from North (-Z axis), clockwise
+        let bearing = Math.atan2(dx, -dz) * 180 / Math.PI;
+        if (bearing < 0) bearing += 360;
+
+        // Get raw elevations for 3D distance, height difference, and azimuth
         const halfW = terrainMesh.modelWidth / 2;
         const halfH = terrainMesh.modelHeight / 2;
         const uA = (ax + halfW) / terrainMesh.modelWidth;
@@ -211,22 +245,26 @@ export class MeasureTool {
             if (Number.isFinite(elevA) && Number.isFinite(elevB)) {
                 const elevDiff = elevB - elevA;
                 const dist3D = Math.hypot(hDist, elevDiff);
-                this._renderLabel(hDist, elevDiff, dist3D);
+                // Azimuth: vertical angle from horizontal (positive = uphill)
+                const azimuth = Math.atan2(elevDiff, hDist) * 180 / Math.PI;
+                this._renderLabel(hDist, elevDiff, dist3D, bearing, azimuth);
             } else {
-                this._renderLabel(hDist, null, null);
+                this._renderLabel(hDist, null, null, bearing, null);
             }
         } else {
-            this._renderLabel(hDist, null, null);
+            this._renderLabel(hDist, null, null, bearing, null);
         }
     }
 
     /**
-     * Render 3-line distance label directly to canvas.
+     * Render 5-line distance label directly to canvas.
      * @param {number} hDist - Horizontal distance in meters
      * @param {number|null} elevDiff - Height difference in meters (B - A)
      * @param {number|null} dist3D - 3D distance in meters
+     * @param {number} bearing - Compass bearing in degrees
+     * @param {number|null} azimuth - Vertical angle in degrees
      */
-    _renderLabel(hDist, elevDiff, dist3D) {
+    _renderLabel(hDist, elevDiff, dist3D, bearing, azimuth) {
         const canvas = this.label.userData.canvas;
         if (!canvas) return;
 
@@ -253,11 +291,11 @@ export class MeasureTool {
         ctx.fill();
 
         // Text lines
-        ctx.font = 'bold 30px Arial';
+        ctx.font = 'bold 24px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        const lineH = h / 3;
+        const lineH = h / 5;
         const cx = w / 2;
 
         // Line 1: Horizontal
@@ -275,6 +313,17 @@ export class MeasureTool {
         if (dist3D !== null) {
             ctx.fillStyle = '#4fc3f7';
             ctx.fillText(`3D: ${this._formatDist(dist3D)}`, cx, lineH * 2.5);
+        }
+
+        // Line 4: Bearing
+        ctx.fillStyle = '#ffc107';
+        ctx.fillText(`Bearing: ${bearing.toFixed(1)}°`, cx, lineH * 3.5);
+
+        // Line 5: Azimuth (vertical angle)
+        if (azimuth !== null) {
+            const sign = azimuth >= 0 ? '+' : '';
+            ctx.fillStyle = '#ff9800';
+            ctx.fillText(`Azimuth: ${sign}${azimuth.toFixed(1)}°`, cx, lineH * 4.5);
         }
 
         this.label.userData.texture.needsUpdate = true;

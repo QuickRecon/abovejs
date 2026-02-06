@@ -163,8 +163,9 @@ Detection per frame:
 ### Visuals
 
 - Two red dots (0xff4444): sphere radius **0.008 m**, depthTest false
-- Connecting white line (opacity **0.8**, depthTest false)
-- Label sprite: 512x192 canvas (tall for 3 lines), fontSize **32**, spriteScale **0.14**, background rgba(0,0,0,0.7)
+- Direction arrow: red cone (0xff4444), positioned 85% along line from A to B, points in direction of travel
+- Connecting white line (opacity **0.8**, depthTest false, frustumCulled false)
+- Label sprite: 512x280 canvas (5 lines), fontSize **24**, spriteScale **0.16**, background rgba(0,0,0,0.7)
 - Highlight rings per dot: inner **0.012**, outer **0.02**, red, depthTest false
 - Initial dot positions: dotA at (-0.02, 0, 0), dotB at (0.02, 0, 0) relative to group origin
 
@@ -176,16 +177,18 @@ Detection per frame:
 
 ### Distance Computation (throttled at 100 ms)
 
-Three measurements displayed on the label:
+Five measurements displayed on the label:
 
 1. **H (horizontal):** model-local XZ distance x realWorldScale -- real-world horizontal distance
 2. **deltaH (height difference):** raw elevation difference between dot positions (elevB - elevA), signed with +/- prefix
 3. **3D distance:** hypot(horizontalDist, elevationDiff) in real-world meters
+4. **Bearing:** compass direction from A to B in degrees (0° = North, 90° = East, etc.)
+5. **Azimuth:** vertical inclination angle in degrees (positive = uphill from A to B)
 
 ### Label Rendering
 
 - Direct canvas rendering with rounded-rect background
-- 3 lines at equal vertical spacing: "H: {dist}" (white), "deltaH: {+/-dist}" (gray #aaaaaa), "3D: {dist}" (cyan #4fc3f7)
+- 5 lines at equal vertical spacing: "H: {dist}" (white), "ΔH: {+/-dist}" (gray #aaaaaa), "3D: {dist}" (cyan #4fc3f7), "Bearing: {deg}°" (gold #ffc107), "Azimuth: {+/-deg}°" (orange #ff9800)
 - Distance formatting: <1 m -- cm with 1 decimal, <1000 m -- m with 1 decimal, >=1000 m -- km with 2 decimals
 
 ### Grab Behavior (per endpoint)
@@ -198,8 +201,9 @@ Three measurements displayed on the label:
 ### Clamped Scaling
 
 - Dots: base **0.008**, world range [**0.005**, **0.025**]
+- Direction arrow: base **0.006**, world range [**0.004**, **0.02**]
 - Highlight rings: same scale as dots
-- Label: base **0.14**, world range [**0.04**, **0.18**], maintains 512:192 aspect ratio
+- Label: base **0.16**, world range [**0.05**, **0.20**], maintains 512:280 aspect ratio
 
 ---
 
@@ -212,16 +216,19 @@ Displays an elevation profile between two draggable endpoints with a terrain-fol
 ### Visuals
 
 - Two green endpoint dots (0x4caf50): sphere radius **0.008 m**, depthTest false (distinct from red MeasureTool)
-- Cyan profile line (0x00e5ff): follows terrain surface with **80** sample points, opacity **0.9**, depthTest false
+- Direction arrow: green cone (0x4caf50), positioned 85% along line from A to B, points in direction of travel
+- Cyan profile line (0x00e5ff): follows terrain surface with **80** sample points, opacity **0.9**, depthTest false, frustumCulled false
 - Gold marker dot (0xffc107): sphere radius **0.006 m**, depthTest false, slides along profile
-- Label sprite: 512x192 canvas (3 lines), fontSize **32**, spriteScale **0.14**, positioned **0.04 m** above marker
+- Label sprite: 512x256 canvas (4 lines), fontSize **26**, spriteScale **0.16**, positioned **0.04 m** above marker
 - Highlight rings: green for endpoints (inner **0.012**, outer **0.02**), gold for marker
 
 ### Three-Point Interaction System
 
-- Index 0 = dotA (profile start endpoint)
-- Index 1 = dotB (profile end endpoint)
-- Index 2 = marker (constrained to profile line)
+Marker is returned first so it wins proximity ties when at endpoints:
+
+- Index 0 = marker (constrained to profile line) -- **priority for interaction**
+- Index 1 = dotA (profile start endpoint)
+- Index 2 = dotB (profile end endpoint)
 
 ### Profile Computation (throttled at 100 ms)
 
@@ -233,16 +240,18 @@ Displays an elevation profile between two draggable endpoints with a terrain-fol
 ### Marker Behavior
 
 - markerT value [0, 1] determines position along profile by distance fraction
-- When grabbed (index 2): projects pinch position onto profile line, updates markerT to nearest point
+- When grabbed (index 0): projects pinch position onto profile line, updates markerT to nearest point
 - Marker cannot leave the profile path -- always constrained to line
+- Marker has interaction priority over endpoints when at same position
 
-### Label Display
+### Label Display (throttled at 100 ms)
 
-Three lines, centered:
+Four lines, centered:
 
 1. "From A: {dist}" (white) -- distance along profile from A to marker
 2. "From B: {dist}" (gray #aaaaaa) -- distance along profile from marker to B
-3. "Elev: {elevation}m" (gold #ffc107) -- interpolated raw elevation at marker position
+3. "Elev: {elevation}m ({depth}m below ref)" (gold #ffc107) -- interpolated elevation and depth below reference
+4. "Bearing: {deg}°" (cyan #4fc3f7) -- compass direction from A to B
 
 Distance formatting: same as MeasureTool (<1 m -- cm, <1000 m -- m, >=1000 m -- km)
 
@@ -255,9 +264,10 @@ Distance formatting: same as MeasureTool (<1 m -- cm, <1000 m -- m, >=1000 m -- 
 ### Clamped Scaling
 
 - Endpoint dots: base **0.008**, world range [**0.005**, **0.025**]
+- Direction arrow: base **0.006**, world range [**0.004**, **0.02**]
 - Marker: base **0.006**, world range [**0.004**, **0.02**]
 - Highlight rings: same scale as their respective dots
-- Label: base **0.14**, world range [**0.04**, **0.18**], maintains 512:192 aspect ratio
+- Label: base **0.16**, world range [**0.05**, **0.20**], maintains 512:256 aspect ratio
 
 ---
 

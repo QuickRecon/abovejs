@@ -22,6 +22,8 @@ export class ProfileTool {
         this.marker = null;
         this.profileLine = null;
         this.label = null;
+        this.directionArrowA = null;  // Arrow near A (15%)
+        this.directionArrowB = null;  // Arrow near B (85%)
 
         // Highlight rings
         this.highlightA = null;
@@ -63,6 +65,14 @@ export class ProfileTool {
         this.dotB.position.copy(this.posB);
         this.group.add(this.dotB);
 
+        // Direction arrows (cones pointing from A toward B)
+        const arrowGeo = new THREE.ConeGeometry(0.004, 0.012, 8);
+        const arrowMat = new THREE.MeshBasicMaterial({ color: 0x4caf50, depthTest: false });
+        this.directionArrowA = new THREE.Mesh(arrowGeo, arrowMat.clone());
+        this.directionArrowB = new THREE.Mesh(arrowGeo, arrowMat.clone());
+        this.group.add(this.directionArrowA);
+        this.group.add(this.directionArrowB);
+
         // Marker (gold, 6mm)
         const markerGeo = new THREE.SphereGeometry(0.006, 12, 12);
         const markerMat = new THREE.MeshBasicMaterial({ color: 0xffc107, depthTest: false });
@@ -84,14 +94,14 @@ export class ProfileTool {
         this.profileLine.frustumCulled = false;
         this.group.add(this.profileLine);
 
-        // Label (512x192 for 3 lines)
+        // Label (512x256 for 4 lines)
         this.label = createTextSprite('--', {
-            fontSize: 32,
+            fontSize: 26,
             color: '#ffffff',
             backgroundColor: 'rgba(0,0,0,0.7)',
             canvasWidth: 512,
-            canvasHeight: 192,
-            spriteScale: 0.14
+            canvasHeight: 256,
+            spriteScale: 0.16
         });
         this.group.add(this.label);
 
@@ -150,23 +160,27 @@ export class ProfileTool {
             this.marker.scale.setScalar(markerS);
             this.highlightMarker.scale.setScalar(markerS);
 
-            const labelBase = 0.14;
-            const labelS = clampedElementScale(labelBase, cs, 0.04, 0.18);
-            const aspect = 512 / 192;
+            const arrowS = clampedElementScale(0.006, cs, 0.004, 0.02);
+            this.directionArrowA.scale.setScalar(arrowS);
+            this.directionArrowB.scale.setScalar(arrowS);
+
+            const labelBase = 0.16;
+            const labelS = clampedElementScale(labelBase, cs, 0.05, 0.20);
+            const aspect = 512 / 256;
             this.label.scale.set(labelBase * labelS, labelBase / aspect * labelS, 1);
         }
 
         const groupPos = this.group.position;
 
-        // Snap non-grabbed endpoints to terrain
-        if (this.grabbedIndex !== 0) {
+        // Snap non-grabbed endpoints to terrain (indices: 1=dotA, 2=dotB)
+        if (this.grabbedIndex !== 1) {
             const worldAx = groupPos.x + this.posA.x;
             const worldAz = groupPos.z + this.posA.z;
             const yA = terrainMesh.getHeightAtLocalPosition(worldAx, worldAz);
             this.dotA.position.set(this.posA.x, yA - groupPos.y, this.posA.z);
         }
 
-        if (this.grabbedIndex !== 1) {
+        if (this.grabbedIndex !== 2) {
             const worldBx = groupPos.x + this.posB.x;
             const worldBz = groupPos.z + this.posB.z;
             const yB = terrainMesh.getHeightAtLocalPosition(worldBx, worldBz);
@@ -178,6 +192,23 @@ export class ProfileTool {
         this.highlightA.position.y += 0.001;
         this.highlightB.position.copy(this.dotB.position);
         this.highlightB.position.y += 0.001;
+
+        // Update direction arrows (positioned at 15% and 85% along line)
+        this.directionArrowA.position.lerpVectors(this.dotA.position, this.dotB.position, 0.15);
+        this.directionArrowA.position.y += 0.008; // Lift above terrain
+        this.directionArrowB.position.lerpVectors(this.dotA.position, this.dotB.position, 0.85);
+        this.directionArrowB.position.y += 0.008;
+
+        // Orient arrows to point from A toward B
+        const dir = new THREE.Vector3().subVectors(this.dotB.position, this.dotA.position);
+        if (dir.lengthSq() > 0.0001) {
+            dir.normalize();
+            // ConeGeometry points up (+Y by default), rotate to point along dir
+            const up = new THREE.Vector3(0, 1, 0);
+            const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
+            this.directionArrowA.quaternion.copy(quat);
+            this.directionArrowB.quaternion.copy(quat);
+        }
 
         // Compute profile (throttled)
         this._throttledComputeProfile(terrainMesh);
@@ -356,7 +387,7 @@ export class ProfileTool {
         const distFromA = this.markerT * this.totalDistance;
         const distFromB = this.totalDistance - distFromA;
 
-        // Get elevation at marker
+        // Get elevation and depth at marker
         let elevationStr = '--';
         if (this.profilePoints.length >= 2) {
             const targetDist = this.markerT * this.totalDistance;
@@ -380,16 +411,17 @@ export class ProfileTool {
                     localT = (targetDist - pt0.distFromA) / segmentLength;
                 }
                 const elev = pt0.elevation + (pt1.elevation - pt0.elevation) * localT;
-                elevationStr = `${elev.toFixed(1)}m`;
+                const depth = terrainMesh.referenceElevation - elev;
+                elevationStr = `${elev.toFixed(1)}m (${depth.toFixed(1)}m below ref)`;
             }
         }
 
         // Text lines
-        ctx.font = 'bold 30px Arial';
+        ctx.font = 'bold 26px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        const lineH = h / 3;
+        const lineH = h / 4;
         const cx = w / 2;
 
         // Line 1: From A
@@ -400,9 +432,23 @@ export class ProfileTool {
         ctx.fillStyle = '#aaaaaa';
         ctx.fillText(`From B: ${this._formatDist(distFromB)}`, cx, lineH * 1.5);
 
-        // Line 3: Elevation
+        // Line 3: Elevation and depth
         ctx.fillStyle = '#ffc107';
         ctx.fillText(`Elev: ${elevationStr}`, cx, lineH * 2.5);
+
+        // Line 4: Bearing (calculated from A to B)
+        const groupPos = this.group.position;
+        const ax = groupPos.x + this.posA.x;
+        const az = groupPos.z + this.posA.z;
+        const bx = groupPos.x + this.posB.x;
+        const bz = groupPos.z + this.posB.z;
+        const dx = bx - ax;
+        const dz = bz - az;
+        // Bearing: angle from North (-Z), clockwise
+        let bearing = Math.atan2(dx, -dz) * 180 / Math.PI;
+        if (bearing < 0) bearing += 360;
+        ctx.fillStyle = '#4fc3f7';
+        ctx.fillText(`Bearing: ${bearing.toFixed(1)}°`, cx, lineH * 3.5);
 
         this.label.userData.texture.needsUpdate = true;
 
@@ -427,11 +473,17 @@ export class ProfileTool {
 
     /**
      * Get interaction points in model-local space.
-     * @returns {THREE.Vector3[]} [pointA, pointB, marker]
+     * Marker is first so it wins proximity ties at endpoints.
+     * @returns {THREE.Vector3[]} [marker, pointA, pointB]
      */
     getInteractionPoints() {
         const groupPos = this.group.position;
         return [
+            new THREE.Vector3(
+                groupPos.x + this.marker.position.x,
+                groupPos.y + this.marker.position.y,
+                groupPos.z + this.marker.position.z
+            ),
             new THREE.Vector3(
                 groupPos.x + this.dotA.position.x,
                 groupPos.y + this.dotA.position.y,
@@ -441,29 +493,24 @@ export class ProfileTool {
                 groupPos.x + this.dotB.position.x,
                 groupPos.y + this.dotB.position.y,
                 groupPos.z + this.dotB.position.z
-            ),
-            new THREE.Vector3(
-                groupPos.x + this.marker.position.x,
-                groupPos.y + this.marker.position.y,
-                groupPos.z + this.marker.position.z
             )
         ];
     }
 
     /**
      * Set highlight state for a specific interaction point.
-     * @param {number} idx - 0=dotA, 1=dotB, 2=marker
+     * @param {number} idx - 0=marker, 1=dotA, 2=dotB
      * @param {boolean} highlighted
      */
     setHighlight(idx, highlighted) {
-        if (idx === 0 && this.highlightA) this.highlightA.visible = highlighted;
-        if (idx === 1 && this.highlightB) this.highlightB.visible = highlighted;
-        if (idx === 2 && this.highlightMarker) this.highlightMarker.visible = highlighted;
+        if (idx === 0 && this.highlightMarker) this.highlightMarker.visible = highlighted;
+        if (idx === 1 && this.highlightA) this.highlightA.visible = highlighted;
+        if (idx === 2 && this.highlightB) this.highlightB.visible = highlighted;
     }
 
     /**
      * Start grabbing an interaction point.
-     * @param {number} idx - 0=dotA, 1=dotB, 2=marker
+     * @param {number} idx - 0=marker, 1=dotA, 2=dotB
      */
     startGrab(idx) {
         this.grabbedIndex = idx;
@@ -479,16 +526,16 @@ export class ProfileTool {
         const relY = localPos.y - groupPos.y;
 
         if (this.grabbedIndex === 0) {
+            // Moving marker - constrain to profile
+            this._snapMarkerToProfile(localPos);
+        } else if (this.grabbedIndex === 1) {
             // Moving endpoint A
             this.posA.set(localPos.x - groupPos.x, 0, localPos.z - groupPos.z);
             this.dotA.position.set(this.posA.x, relY, this.posA.z);
-        } else if (this.grabbedIndex === 1) {
+        } else if (this.grabbedIndex === 2) {
             // Moving endpoint B
             this.posB.set(localPos.x - groupPos.x, 0, localPos.z - groupPos.z);
             this.dotB.position.set(this.posB.x, relY, this.posB.z);
-        } else if (this.grabbedIndex === 2) {
-            // Moving marker - constrain to profile
-            this._snapMarkerToProfile(localPos);
         }
     }
 

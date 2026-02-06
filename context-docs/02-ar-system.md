@@ -183,11 +183,13 @@ These objects survive disposal and get re-parented into the new scene's modelCon
 
 ### Z-Exaggeration Gesture
 
-- Vertical separation between hands tracked
-- newExag = startExag + (currentVerticalSep - startVerticalSep) * sensitivity
+- Absolute vertical distance between hands tracked (not signed separation)
+- newExag = startExag + (currentVerticalDist - startVerticalDist) * sensitivity
+- Hands apart = increase Z-exaggeration, hands together = decrease (consistent regardless of which hand is higher)
 - zExaggerationSensitivity: 20 units per meter of vertical hand movement
 - Applied via terrainMesh.setZExaggeration() which clamps to 1-10 range
 - Callback updates overlay layers and sidebar slider
+- **Visual indicator:** Cyan cylinder (0x4fc3f7, radius 0.003m, opacity 0.8) connecting hands during gesture, hidden otherwise
 
 ## Inertia System
 

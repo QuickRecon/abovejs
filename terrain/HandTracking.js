@@ -95,6 +95,9 @@ export class HandTracking {
 
         // Tool interaction suppression flag
         this.toolInteractionActive = false;
+
+        // Z-exaggeration visual indicator (vertical line between hands)
+        this.zExagLine = null;
     }
 
     /**
@@ -112,6 +115,9 @@ export class HandTracking {
 
         // Set up hands
         this._setupHands();
+
+        // Set up Z-exaggeration visual indicator
+        this._setupZExagIndicator();
     }
 
     /**
@@ -137,6 +143,25 @@ export class HandTracking {
         this.hand1.addEventListener('pinchend', () => this._onPinchEnd(0));
         this.hand2.addEventListener('pinchstart', () => this._onPinchStart(1));
         this.hand2.addEventListener('pinchend', () => this._onPinchEnd(1));
+    }
+
+    /**
+     * Set up the Z-exaggeration visual indicator (cylinder between hands).
+     */
+    _setupZExagIndicator() {
+        // Use a cylinder for visibility (WebGL often ignores line width)
+        const geometry = new THREE.CylinderGeometry(0.003, 0.003, 1, 8);
+        const material = new THREE.MeshBasicMaterial({
+            color: 0x4fc3f7, // Cyan to match UI theme
+            depthTest: false,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        this.zExagLine = new THREE.Mesh(geometry, material);
+        this.zExagLine.renderOrder = 999;
+        this.zExagLine.visible = false;
+        this.scene.add(this.zExagLine);
     }
 
     /**
@@ -292,6 +317,11 @@ export class HandTracking {
             this.gestureStartData = this._captureGestureStartData(modelContainer);
         }
 
+        // Show/hide Z-exaggeration indicator line
+        if (this.zExagLine) {
+            this.zExagLine.visible = (newGesture === GestureType.Z_EXAGGERATION);
+        }
+
         this.currentGesture = newGesture;
     }
 
@@ -307,8 +337,8 @@ export class HandTracking {
         const delta = new THREE.Vector3().subVectors(pos1, pos0);
         const angle = Math.atan2(delta.x, delta.z);
 
-        // Vertical separation
-        const verticalSeparation = pos1.y - pos0.y;
+        // Vertical distance (absolute, so spreading hands apart always increases)
+        const verticalDistance = Math.abs(pos1.y - pos0.y);
 
         // Compute pivot point in model-local coordinates
         // Use midpoint between hands for more reliable pivot when tracking is unstable
@@ -326,7 +356,7 @@ export class HandTracking {
             midpoint: pos0.clone().add(pos1).multiplyScalar(0.5),
             distance,
             angle,
-            verticalSeparation,
+            verticalDistance,
             modelPosition: modelContainer.position.clone(),
             modelRotation: modelContainer.rotation.y,
             modelScale: modelContainer.scale.x,
@@ -349,6 +379,11 @@ export class HandTracking {
                 ).multiplyScalar(60); // Convert to velocity per second
             }
 
+            // Hide Z-exaggeration indicator when gesture ends
+            if (this.zExagLine) {
+                this.zExagLine.visible = false;
+            }
+
             this.currentGesture = GestureType.NONE;
             this.gestureStartData = null;
         }
@@ -368,6 +403,11 @@ export class HandTracking {
         // Clear gesture state
         this.currentGesture = GestureType.NONE;
         this.gestureStartData = null;
+
+        // Hide Z-exaggeration indicator
+        if (this.zExagLine) {
+            this.zExagLine.visible = false;
+        }
 
         // Clear inertia
         this.velocity.set(0, 0, 0);
@@ -485,11 +525,31 @@ export class HandTracking {
         const pos0 = this.hands[0].position;
         const pos1 = this.hands[1].position;
 
-        // Current vertical separation
-        const currentVerticalSeparation = pos1.y - pos0.y;
-        const verticalDelta = currentVerticalSeparation - this.gestureStartData.verticalSeparation;
+        // Update visual indicator cylinder between hands
+        if (this.zExagLine) {
+            // Position at midpoint
+            this.zExagLine.position.set(
+                (pos0.x + pos1.x) / 2,
+                (pos0.y + pos1.y) / 2,
+                (pos0.z + pos1.z) / 2
+            );
 
-        // Map to z-exaggeration
+            // Scale to match distance between hands
+            const distance = pos0.distanceTo(pos1);
+            this.zExagLine.scale.set(1, distance, 1);
+
+            // Orient to point from pos0 to pos1
+            const direction = new THREE.Vector3().subVectors(pos1, pos0).normalize();
+            const up = new THREE.Vector3(0, 1, 0);
+            const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+            this.zExagLine.quaternion.copy(quaternion);
+        }
+
+        // Current vertical distance (absolute, so spreading hands = positive delta)
+        const currentVerticalDistance = Math.abs(pos1.y - pos0.y);
+        const verticalDelta = currentVerticalDistance - this.gestureStartData.verticalDistance;
+
+        // Map to z-exaggeration: hands apart = increase, hands together = decrease
         const newExaggeration = this.gestureStartData.zExaggeration +
             verticalDelta * this.config.zExaggerationSensitivity;
 
@@ -532,6 +592,12 @@ export class HandTracking {
         }
         if (this.hand2) {
             this.scene.remove(this.hand2);
+        }
+        if (this.zExagLine) {
+            this.scene.remove(this.zExagLine);
+            this.zExagLine.geometry.dispose();
+            this.zExagLine.material.dispose();
+            this.zExagLine = null;
         }
 
         this.renderer = null;
