@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import { HandMenu, ToolType } from './HandMenu.js';
+import { HandMenu, ToolType } from '../ar/HandMenu.js';
 import { DepthProbeTool } from './DepthProbeTool.js';
 import { MeasureTool } from './MeasureTool.js';
 import { ProfileTool } from './ProfileTool.js';

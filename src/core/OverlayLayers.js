@@ -5,7 +5,7 @@
  */
 
 import * as THREE from 'three';
-import { disposeThreeObject } from './utils.js';
+import { disposeThreeObject } from '../scene/utils.js';
 
 /**
  * Configuration defaults.

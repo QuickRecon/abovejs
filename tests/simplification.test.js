@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TerrainMesh } from '../terrain/TerrainMesh.js';
+import { TerrainMesh } from '../src/core/TerrainMesh.js';
 
 describe('_simplifyPolyline2D', () => {
     const tm = new TerrainMesh();

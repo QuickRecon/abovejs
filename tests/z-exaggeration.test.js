@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { OverlayLayers } from '../terrain/OverlayLayers.js';
+import { OverlayLayers } from '../src/core/OverlayLayers.js';
 
 /**
  * Create a mock contour group with known vertex positions.

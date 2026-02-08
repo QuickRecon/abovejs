@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TerrainMesh } from '../terrain/TerrainMesh.js';
+import { TerrainMesh } from '../src/core/TerrainMesh.js';
 import { createTestTerrain } from './helpers/terrain-factory.js';
 import { slopedGrid, flatGrid } from './helpers/elevation-grids.js';
 

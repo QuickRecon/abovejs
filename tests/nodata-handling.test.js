@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { TerrainMesh } from '../terrain/TerrainMesh.js';
+import { TerrainMesh } from '../src/core/TerrainMesh.js';
 
 describe('TerrainMesh._isNoData', () => {
     it('NaN → true', () => {

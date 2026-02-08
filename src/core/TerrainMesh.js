@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { TURBO_COLORMAP, processInChunks } from '../utils.js';
+import { TURBO_COLORMAP, processInChunks } from './utils.js';
 
 // Marching squares edge lookup table (16 cases).
 // Each case maps to pairs of edges where the contour crosses.

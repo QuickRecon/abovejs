@@ -4,60 +4,153 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-COGViewer is a client-side web application for interactive 3D visualization of Cloud Optimized GeoTIFF (COG) elevation data. It supports desktop viewing with orbit controls and immersive WebXR AR on Meta Quest headsets with hand tracking.
+**abovejs** is a JavaScript library for interactive 3D visualization of Cloud Optimized GeoTIFF (COG) elevation data. It supports desktop viewing with orbit controls and immersive WebXR AR on Meta Quest headsets with hand tracking.
 
-## Running
+The `examples/cogviewer/` directory contains a complete example application demonstrating library usage.
 
-No build system, bundler, or package manager. All dependencies load via CDN (Three.js r160, GeoTIFF 2.1.3). Serve `index.html` with any static HTTP server (e.g. `python3 -m http.server`). For WebXR AR, HTTPS is required.
+## Running the Example
+
+No build system, bundler, or package manager. All dependencies load via CDN (Three.js r160, GeoTIFF 2.1.3). Serve from the `examples/cogviewer/` directory with any static HTTP server:
+
+```bash
+cd examples/cogviewer
+python3 -m http.server
+```
+
+For WebXR AR, HTTPS is required.
 
 There are no tests or linting configured.
 
-## Architecture
+## Directory Structure
 
-### Data Flow
+```
+abovejs/
+├── src/                          # Library source
+│   ├── index.js                  # Main exports
+│   ├── TerrainViewer.js          # Main orchestrator class
+│   ├── core/                     # Core terrain processing
+│   │   ├── TerrainMesh.js        # GPU mesh generation, shaders
+│   │   ├── OverlayLayers.js      # Contour lines
+│   │   ├── COGLoader.js          # GeoTIFF loading
+│   │   ├── ElevationAnalysis.js  # Elevation data analysis
+│   │   └── utils.js              # Colormap, async chunking
+│   ├── scene/                    # Three.js scene management
+│   │   ├── ARScene.js            # Renderer, camera, controls
+│   │   ├── ARManager.js          # WebXR session lifecycle
+│   │   └── utils.js              # Disposal helpers
+│   ├── ar/                       # AR/XR interaction
+│   │   ├── HandTracking.js       # Hand pose, gestures
+│   │   └── HandMenu.js           # Palm-anchored tool menu
+│   └── tools/                    # AR interaction tools
+│       ├── ToolManager.js        # Tool lifecycle
+│       ├── ToolUtils.js          # Shared tool utilities
+│       ├── DepthProbeTool.js     # Elevation probing
+│       ├── MeasureTool.js        # Distance measurement
+│       └── ProfileTool.js        # Elevation profiles
+├── examples/
+│   └── cogviewer/                # Example application
+│       ├── index.html            # Landing page + viewer UI
+│       ├── main.js               # UI code using TerrainViewer
+│       ├── style.css             # Styling
+│       ├── LoadingProgress.js    # Loading overlay component
+│       └── examples.json         # Example dataset metadata
+├── context-docs/                 # Behavior documentation
+├── README.md
+├── LICENSE
+└── CLAUDE.md
+```
 
-1. User provides a COG file (upload or URL) on the landing page
-2. `main.js` orchestrates: parses GeoTIFF, extracts elevation raster, detects NoData/min/max
-3. `TerrainMesh` generates a 3D mesh from the elevation grid with GPU shaders, normal maps, and Turbo colormap coloring
-4. `ARScene` sets up the Three.js scene, renderer, and camera (desktop or WebXR)
-5. `OverlayLayers` optionally generates contour lines via marching squares
+## Library API (TerrainViewer)
 
-### Module Responsibilities (`terrain/`)
+```javascript
+import { TerrainViewer } from './src/index.js';
 
-- **TerrainMesh.js** (~1750 lines, largest module) — Core mesh generation. Custom GLSL vertex/fragment shaders handle Z-exaggeration via uniforms (no mesh rebuild). Generates normal maps from full-resolution elevation data at up to 4K. Turbo colormap applied as vertex colors.
-- **ARScene.js** — Three.js scene lifecycle, renderer setup, desktop OrbitControls, WebXR session rendering loop, pause-drift compensation for `visible-blurred` state.
-- **ARManager.js** — WebXR session creation/teardown, feature detection, session event wiring.
-- **HandTracking.js** — WebXR hand pose tracking. Detects pinch gestures per-hand and multi-hand compound gestures (drag, scale, rotate, Z-exaggeration).
-- **ToolManager.js** — Lifecycle management for AR interaction tools (activate/deactivate/update cycle).
-- **HandMenu.js** — Palm-anchored radial menu UI for tool selection in AR.
-- **MeasureTool.js / DepthProbeTool.js** — AR interaction tools for distance measurement and elevation probing.
-- **OverlayLayers.js** — Contour line generation (marching squares with saddle cases), line simplification, vertex-capped rendering. Syncs with Z-exaggeration changes.
-- **LoadingProgress.js** — Loading overlay UI state management.
+const viewer = new TerrainViewer('#container', {
+  source: 'terrain.tif',       // URL or File object
+  enableAR: true,              // Enable AR mode (default: true)
+  enableTools: true,           // Enable AR tools (default: true)
+  enableContours: true,        // Enable contour lines (default: true)
+  terrain: {
+    polygons: 1_000_000,       // Target polygon count
+    zExaggeration: 4,          // Initial Z exaggeration (1-10)
+    normalStrength: 2,         // Normal map strength (0-10)
+  },
+  contours: {
+    interval: 1,               // Contour interval in meters
+  },
+  onProgress: (stage, percent) => {},
+  onReady: (viewer) => {},
+  onError: (error) => {},
+  onModeChange: (mode) => {},           // 'desktop' | 'ar'
+  onZExaggerationChange: (factor) => {},
+});
 
-### Key Files Outside `terrain/`
+// Runtime methods
+viewer.setZExaggeration(5);
+viewer.setNormalStrength(3);
+viewer.setReferenceElevation(120);
+viewer.setContourInterval(2);
+viewer.setContourVisibility(false);
 
-- **main.js** — Application orchestrator. Handles landing page UI, COG loading, wires terrain mesh to AR scene, manages sidebar controls (Z-exaggeration slider, contour interval, colormap toggles).
-- **utils.js** — Turbo colormap lookup table, `processInChunks` for non-blocking iteration.
-- **examples.json** — Metadata for bundled example COG datasets.
+// Getters
+viewer.getElevationRange();     // { min, max, reference }
+viewer.getZExaggeration();
+viewer.isContourVisible();
 
-### Important Patterns
+// Mode control
+viewer.enterDesktopMode();
+viewer.enterARMode();
+viewer.isARSupported();
+viewer.getMode();               // 'none' | 'desktop' | 'ar'
 
-- **Z-exaggeration** is applied in the vertex shader via a uniform, not by rebuilding geometry. Contour overlays must resync when exaggeration changes.
-- **NoData handling**: Elevation grids may contain NoData values (often -9999 or similar). These pixels are excluded from min/max analysis and mesh generation.
-- **Chunk processing**: Long-running CPU work (mesh generation, contour tracing) uses `processInChunks` to avoid blocking the main thread.
-- **WebXR visible-blurred**: When the Quest system menu opens, input poses are blocked by spec and frame rate is throttled. `ARScene` compensates viewer drift to prevent head-locking. See `.claude/webxr-pause-tracking.md` for detailed analysis.
-- **Contour vertex budget**: Contour generation caps at 2M vertices to prevent GPU memory issues on complex terrain.
+// Cleanup
+viewer.dispose();
+```
+
+## Module Responsibilities
+
+### Core (`src/core/`)
+
+- **TerrainMesh.js** (~1750 lines) — GPU mesh generation. Custom GLSL shaders handle Z-exaggeration via uniforms (no mesh rebuild). Generates normal maps at up to 4K. Turbo colormap as vertex colors. Triangle filtering for above-reference areas.
+- **OverlayLayers.js** — Contour line generation (marching squares with saddle cases), line simplification, vertex-capped rendering. Auto-syncs with Z-exaggeration.
+- **COGLoader.js** — GeoTIFF loading from URL or File, NoData detection, multi-resolution reading.
+- **ElevationAnalysis.js** — Min/max/reference elevation analysis.
+- **utils.js** — Turbo colormap LUT, `processInChunks` for non-blocking iteration.
+
+### Scene (`src/scene/`)
+
+- **ARScene.js** — Three.js scene lifecycle, renderer setup, desktop OrbitControls, WebXR rendering loop, pause-drift compensation.
+- **ARManager.js** — WebXR session creation/teardown, feature detection, mode switching.
+- **utils.js** — Three.js object disposal helpers.
+
+### AR (`src/ar/`)
+
+- **HandTracking.js** — WebXR hand pose tracking. Per-hand pinch gestures and compound gestures (drag, scale, rotate, Z-exaggeration).
+- **HandMenu.js** — Palm-anchored radial menu for tool selection.
+
+### Tools (`src/tools/`)
+
+- **ToolManager.js** — Tool lifecycle (grab, place, interact, dispose).
+- **DepthProbeTool.js** — Elevation and depth display at a point.
+- **MeasureTool.js** — Distance measurement between two points.
+- **ProfileTool.js** — Elevation profile along a path.
+
+## Important Patterns
+
+- **Z-exaggeration** is applied in the vertex shader via a uniform, not by rebuilding geometry. Contour overlays auto-resync when exaggeration changes.
+- **NoData handling**: Elevation grids may contain NoData values (often -9999). These are excluded from analysis and mesh generation.
+- **Chunk processing**: Long-running CPU work uses `processInChunks` to avoid blocking the main thread.
+- **WebXR visible-blurred**: When Quest system menu opens, `ARScene` compensates viewer drift. See `.claude/webxr-pause-tracking.md`.
+- **Contour vertex budget**: Contour generation caps at 2M vertices to prevent GPU memory issues.
 
 ## Context Docs
 
-The `context-docs/` directory contains behavior-focused documentation that doubles as editable specifications. Editing a value or behavior description in these files communicates a desired code change.
+The `context-docs/` directory contains behavior-focused documentation that doubles as editable specifications.
 
 | File | Covers |
 |------|--------|
 | `00-overview.md` | Architecture, module graph, data flows, coordinate spaces, URL params |
-| `01-terrain-pipeline.md` | TerrainMesh, OverlayLayers, utils.js (colormap, chunking, disposal) |
+| `01-terrain-pipeline.md` | TerrainMesh, OverlayLayers, utils.js |
 | `02-ar-system.md` | ARScene, ARManager, HandTracking, pause compensation, gestures |
 | `03-tools-and-menus.md` | ToolManager, HandMenu, MeasureTool, DepthProbeTool, ToolUtils |
 | `04-ui-and-loading.md` | Landing page, sidebar controls, LoadingProgress, page transitions |
-
-All concrete values (thresholds, defaults, ranges) are stated inline. When making changes, check the relevant context-doc to understand current behavior and update it to reflect the new behavior.

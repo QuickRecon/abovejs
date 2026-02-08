@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { analyzeElevation } from '../elevation-analysis.js';
+import { analyzeElevation } from '../src/core/ElevationAnalysis.js';
 
 describe('analyzeElevation', () => {
     it('ascending values', () => {

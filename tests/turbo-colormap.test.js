@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { TURBO_COLORMAP } from '../utils.js';
-import { TerrainMesh } from '../terrain/TerrainMesh.js';
+import { TURBO_COLORMAP } from '../src/core/utils.js';
+import { TerrainMesh } from '../src/core/TerrainMesh.js';
 
 describe('TURBO_COLORMAP table', () => {
     it('has exactly 256 entries', () => {

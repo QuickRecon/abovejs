@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import { createTextSprite } from './ToolUtils.js';
+import { createTextSprite } from '../tools/ToolUtils.js';
 
 /** Menu states */
 export const MenuState = {

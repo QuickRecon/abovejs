@@ -3,7 +3,7 @@
  * needing a renderer, DOM, or GPU.
  */
 
-import { TerrainMesh } from '../../terrain/TerrainMesh.js';
+import { TerrainMesh } from '../../src/core/TerrainMesh.js';
 
 /**
  * Create a TerrainMesh instance ready for testing.
